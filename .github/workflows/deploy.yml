@@ -1,0 +1,39 @@
+# استقرار خودکار روی Cloudflare با هر push به main (یا اجرای دستی از تب Actions).
+# Secrets لازم در GitHub (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   — توکن با دسترسی: D1 Edit + Workers Scripts Edit
+#   CLOUDFLARE_ACCOUNT_ID  — شناسه اکانت Cloudflare (داشبورد → Workers & Pages)
+#   TELEGRAM_BOT_TOKEN     — اختیاری؛ اگر ست شود وب‌هوک ربات هم خودکار فعال می‌شود
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Tests
+        run: npm test
+
+      - name: Deploy (D1 + Worker + webhook)
+        env:
+          DEPLOY_CI: "1"
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: node scripts/deploy.mjs

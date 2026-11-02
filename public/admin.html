@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, maximum-scale=1">
+  <meta name="robots" content="noindex">
+  <meta name="color-scheme" content="dark light">
+  <title>پنل مدیریت اپ — شارژ ساختمان</title>
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <meta name="theme-color" content="#2f86dd">
+  <script>try{var t=localStorage.getItem('bc_theme')||'auto';document.documentElement.dataset.theme=t;}catch(e){}</script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="admin-body">
+  <button id="gate-theme" class="theme-fab" aria-label="تغییر تم" title="تغییر تم (خودکار/روشن/تاریک)"></button>
+
+  <!-- ===== install / login ===== -->
+  <div id="gate" class="gate">
+    <div class="gate-card">
+      <div class="gate-logo">
+        <img src="icon.svg" alt="" width="52" height="52">
+      </div>
+      <h1 id="gate-title">پنل مدیریت اپ</h1>
+      <p id="gate-sub" class="gate-sub">مدیریت کاربران، تنظیمات و ابزارهای نصب اپ شارژ ساختمان</p>
+
+      <form id="install-form" hidden>
+        <div class="install-note">نصب اولیه — تنها بار اول که هیچ مدیری تعریف نشده است قابل استفاده است.</div>
+        <div class="field">
+          <label for="in-name">نام ساختمان *</label>
+          <input id="in-name" placeholder="مثلاً: برج نگین" required>
+        </div>
+        <div class="field">
+          <label for="in-addr">آدرس (اختیاری)</label>
+          <input id="in-addr" placeholder="آدرس ساختمان">
+        </div>
+        <div class="field">
+          <label for="in-user">نام کاربری مدیر اپ *</label>
+          <input id="in-user" dir="ltr" autocomplete="username" placeholder="admin" required>
+        </div>
+        <div class="field">
+          <label for="in-pass">رمز عبور *</label>
+          <input id="in-pass" type="password" dir="ltr" autocomplete="new-password" placeholder="حداقل ۶ کاراکتر" required>
+        </div>
+        <div class="field">
+          <label for="in-pass2">تکرار رمز عبور *</label>
+          <input id="in-pass2" type="password" dir="ltr" required>
+        </div>
+        <button class="btn accent block" type="submit" id="in-go">اجرای نصب اولیه</button>
+      </form>
+
+      <form id="login-form" hidden>
+        <div class="field">
+          <label for="lg-user">نام کاربری</label>
+          <input id="lg-user" dir="ltr" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="lg-pass">رمز عبور</label>
+          <input id="lg-pass" type="password" dir="ltr" autocomplete="current-password" required>
+        </div>
+        <button class="btn accent block" type="submit" id="lg-go">ورود</button>
+        <div class="gate-err" id="gate-err"></div>
+      </form>
+    </div>
+    <p class="gate-foot">این پنل مستقل از اپ ساختمان است؛ مدیران ساختمان و ساکنین از طریق اپ (index.html) وارد می‌شوند.</p>
+  </div>
+
+  <!-- ===== panel ===== -->
+  <div id="panel" class="panel" hidden>
+    <aside class="side">
+      <div class="side-brand">
+        <span class="side-ic"><img src="icon.svg" alt="" width="26" height="26"></span>
+        <div>
+          <b id="side-bname">پنل مدیریت اپ</b>
+          <small>مدیریت کل اپلیکیشن</small>
+        </div>
+      </div>
+      <nav class="side-nav" id="side-nav">
+        <button class="snav on" data-view="overview">📊 داشبورد اپ</button>
+        <button class="snav" data-view="managers">👑 مدیران ساختمان</button>
+        <button class="snav" data-view="users">👥 کاربران</button>
+        <button class="snav" data-view="performance">📈 عملکرد مدیر</button>
+        <button class="snav" data-view="botmsgs">💬 پیام‌های ربات</button>
+        <button class="snav" data-view="visits">🚪 ورود کاربران</button>
+        <button class="snav" data-view="settings">⚙️ تنظیمات اپ</button>
+        <button class="snav" data-view="tools">🧰 داده نمونه و نصب</button>
+        <button class="snav" data-view="guide">📘 راهنمای نصب</button>
+        <button class="snav" data-view="tutorial">🎓 آموزش پنل</button>
+      </nav>
+      <div class="side-foot">
+        <button class="btn subtle block side-theme" id="side-theme" title="تغییر تم (خودکار/روشن/تاریک)"></button>
+        <button class="btn ghost block" id="side-logout">خروج از حساب</button>
+      </div>
+    </aside>
+
+    <main class="pmain" id="pmain" aria-live="polite">
+      <div class="pview" id="pview"></div>
+    </main>
+  </div>
+
+  <footer class="dev-foot">
+    <span class="df-line">ساخته شده با <span class="df-heart">❤️</span></span>
+    <span class="df-line">توسط پدرام ایزدپناه</span>
+    <span class="df-line df-ver" id="df-version" dir="rtl"></span>
+  </footer>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <script type="module" src="js/admin.js"></script>
+</body>
+</html>

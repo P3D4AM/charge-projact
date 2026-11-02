@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // نام اپلیکیشن روی Cloudflare (بعد از deploy: https://building-charges.<subdomain>.workers.dev)
+  "name": "building-charges",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-06-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "building-charges",
+      // ← بعد از اجرای «wrangler d1 create building-charges» مقدار database_id خروجی را اینجا جایگزین کنید
+      "database_id": "42d171b6-43fb-4644-9b3e-afda069f4e85"
+    }
+  ],
+  "vars": {
+    // حداکثر عمر معتبر initData تلگرام (ثانیه)
+    "INITDATA_MAX_AGE": "86400"
+  },
+  "triggers": {
+    // یادآوری خودکار ماهانه: هر روز ساعت ۰۵:۳۰ UTC (۰۹:۰۰ به وقت تهران) بررسی می‌شود؛
+    // داخل کد مشخص است فقط روزِ تعیین‌شده از هر ماه شمسی یک‌بار پیام‌ها ارسال شوند
+    // (پنل مدیر ← گزارش‌ها ← یادآوری خودکار ماهانه)
+    "crons": ["30 5 * * *"]
+  }
+  // Secrets (با wrangler secret put تنظیم شوند — در فایل نباشند):
+  //   BOT_TOKEN        توکن ربات تلگرام (برای ورود خودکار و یادآوری‌ها؛ اختیاری)
+  //   SESSION_SECRET   کلید امضای نشست‌ها (اختیاری؛ اگر تنظیم نشود هنگام نصب به‌صورت خودکار در D1 ساخته می‌شود)
+  //   WEBHOOK_SECRET   توکن محرمانه وب‌هوک تلگرام (اختیاری)
+}

@@ -1,0 +1,24 @@
+{
+  "name": "telegram-building-charges",
+  "version": "2.20.1",
+  "private": true,
+  "type": "module",
+  "description": "Telegram Mini App for building charge management, deployed on Cloudflare Workers + D1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:auto": "node scripts/deploy.mjs",
+    "deploy:selftest": "node scripts/deploy.mjs --selftest",
+    "secret:bot": "wrangler secret put BOT_TOKEN",
+    "db:init": "wrangler d1 execute building-charges --remote --file=./schema.sql -y",
+    "db:init:local": "wrangler d1 execute building-charges --local --file=./schema.sql",
+    "test": "node scripts/test-core.mjs && node scripts/test-api.mjs && node scripts/test-scheduler.mjs && node scripts/test-visits.mjs && node scripts/test-botmessages.mjs && node scripts/test-webhook-sim.mjs && node scripts/test-deploy-retry.mjs && node scripts/test-schema-drift.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.24.0"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "pdf-lib": "^1.17.1"
+  }
+}

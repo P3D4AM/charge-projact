@@ -1,0 +1,3 @@
+# این فایل را به «.dev.vars» کپی کنید و توکن واقعی ربات را قرار دهید (فقط برای wrangler dev)
+BOT_TOKEN=123456789:AA...your_test_bot_token
+DEV_MODE=1
