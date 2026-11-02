@@ -726,6 +726,7 @@ function renderUnitRows() {
   }
   return `<div class="rows">` + list.map(u => {
     const hasAcc = Boolean(u.has_account);
+    const uCredit = Math.max(0, Number(u.credit) || 0);
     return `
     <div class="row clickable" data-action="unit-open" data-id="${u.id}">
       <div class="badge">${esc(faNum(u.number))}</div>
@@ -733,10 +734,11 @@ function renderUnitRows() {
         <div class="t1">${esc(u.resident_name || 'بدون ساکن')}</div>
         <div class="t2">${faNum(u.area_m2)} متر • ${faNum(u.residents_count)} نفر ${hasAcc ? ' • حساب ساکن فعال' : ''}</div>
       </div>
-      <div class="end">
+      <div class="end" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         ${u.debt > 0
           ? `<span class="chip unpaid">${fmtMoney(u.debt)}</span>`
           : '<span class="chip paid">تسویه</span>'}
+        ${uCredit > 0 ? `<span class="chip accent" title="اعتبار اضافه‌پرداخت — در شارژ ماه‌های بعد کسر می‌شود">${icon('wallet', 11)} اعتبار ${fmtMoney(uCredit)}</span>` : ''}
       </div>
     </div>`;
   }).join('') + `</div>`;
@@ -775,12 +777,24 @@ function tsToJalali(ts) {
 async function openUnitModal(unitId) {
   const unit = state.unitsCache.find(u => u.id === unitId);
   if (!unit) return;
-  const [{ debts }, accRes] = await Promise.all([
+  const [{ debts }, accRes, creditsRes] = await Promise.all([
     api('/debts?unit_id=' + unitId),
-    api('/residents?unit_id=' + unitId).catch(() => ({ residents: [] }))
+    api('/residents?unit_id=' + unitId).catch(() => ({ residents: [] })),
+    // v2.21.0 — دفتر اعتبار اضافه‌پرداخت واحد (برای نمایش و مدیریت)
+    api('/credits?unit_id=' + unitId).catch(() => ({ entries: [] }))
   ]);
   debts.forEach(x => { state.debtCache[x.id] = x; });
   const acc = (accRes.residents || [])[0] || null;
+  const unitCredit = Math.max(0, Number(unit.credit) || 0);
+  const creditRows = (creditsRes.entries || []).slice(0, 8).map(e => `
+    <div class="row" style="padding:6px 0">
+      <div class="badge ${e.amount > 0 ? '' : 'gray'}">${icon(e.amount > 0 ? 'plus' : 'wallet', 14)}</div>
+      <div class="mid">
+        <div class="t1" style="color:${e.amount > 0 ? 'var(--ok)' : 'var(--muted)'}">${e.amount > 0 ? '+' : '−'}${fmtMoney(Math.abs(e.amount))}</div>
+        <div class="t2">${esc(e.note || '')} • ${claimDate(e.created_at)}</div>
+      </div>
+      ${e.kind === 'add' ? `<button class="btn danger sm" data-action="credit-del" data-id="${e.id}" title="حذف ثبت اشتباه">${icon('trash', 13)}</button>` : ''}
+    </div>`).join('');
 
   const lines = (debts || []).map(x => `
     <div class="debt-line">
@@ -794,6 +808,7 @@ async function openUnitModal(unitId) {
       </div>
       <div class="dl-actions">
         ${x.status !== 'paid' ? `<button class="btn ok sm" data-action="debt-pay" data-id="${x.id}">${icon('wallet', 14)} ثبت پرداخت</button>` : ''}
+        ${x.status !== 'paid' && unitCredit > 0 ? `<button class="btn subtle sm" data-action="credit-apply" data-id="${x.id}">${icon('plus', 14)} اعمال اعتبار</button>` : ''}
         ${x.paid_amount > 0 ? `<button class="btn subtle sm" data-action="debt-edit" data-id="${x.id}">${icon('edit', 14)} ویرایش</button>
         <button class="btn subtle sm" data-action="debt-unpay" data-id="${x.id}">${icon('undo', 14)} لغو پرداخت</button>` : ''}
         <button class="btn danger sm" data-action="debt-del" data-id="${x.id}">${icon('trash', 14)}</button>
@@ -841,11 +856,14 @@ async function openUnitModal(unitId) {
         <div class="kv"><span class="k">تلفن</span><span class="v">${esc(faNum(unit.phone || '—'))}</span></div>
         <div class="kv"><span class="k">متراژ</span><span class="v">${faNum(unit.area_m2)} متر</span></div>
         <div class="kv"><span class="k">تعداد ساکنین</span><span class="v">${faNum(unit.residents_count)} نفر</span></div>
+        ${unitCredit > 0 ? `<div class="kv"><span class="k">اعتبار اضافه‌پرداخت</span><span class="v" style="color:var(--ok)">${fmtMoney(unitCredit)} — در شارژ ماه‌های بعد کسر می‌شود</span></div>` : ''}
         ${unit.note ? `<div class="kv"><span class="k">یادداشت</span><span class="v">${esc(unit.note)}</span></div>` : ''}
       </div>
+      <button class="btn block" data-maction="credit-add" style="margin-bottom:12px">${icon('plus', 16)} ثبت اضافه‌پرداخت (اعتبار واحد)</button>
       ${accountCard}
       <div class="section-title" style="margin-top:14px">اقلام شارژ و هزینه</div>
       ${lines || emptyState({ ic: 'file', text: 'قلمی برای این واحد ثبت نشده است' })}
+      ${creditRows ? `<div class="section-title" style="margin-top:14px">دفتر اعتبار (اضافه‌پرداخت / مصرف)</div><div class="rows">${creditRows}</div>` : ''}
       <div class="section-title" style="margin-top:14px">صورت‌حساب PDF</div>
       <div class="filter-row" data-pdf-years>
         ${pdfYears.map(y => `<button class="fchip ${y === pdfSel ? 'on' : ''}" data-py="${y}">${faNum(y)}</button>`).join('')}
@@ -866,6 +884,8 @@ async function openUnitModal(unitId) {
         const act = b.dataset.maction;
         if (act === 'unit-edit') openUnitForm(unit.id);
         if (act === 'unit-pdf') downloadPdf('statement', { unitId: unit.id, jy: pdfSel === 'all' ? '' : pdfSel });
+        // v2.21.0 — ثبت دستی اضافه‌پرداخت (اعتبار واحد)
+        if (act === 'credit-add') openCreditRegisterModal(unit);
         if (act === 'unit-del') {
           const okd = await confirmDialog(`${unitWord(unit.number)}، حساب کاربری و تمام اقلام مالی آن حذف شود؟`);
           if (!okd) return;
@@ -879,6 +899,43 @@ async function openUnitModal(unitId) {
     }
   });
   unitSheet = modalRef;
+}
+
+// ---------------------------------------------------------------------------
+// v2.21.0 — اعتبار اضافه‌پرداخت: ثبت دستی + اعمال روی قلم + حذف ثبتِ اشتباه
+// ---------------------------------------------------------------------------
+function openCreditRegisterModal(unit, onDone) {
+  openModal({
+    title: 'ثبت اضافه‌پرداخت — ' + unitWord(unit.number),
+    body: `
+      <div class="form-grid">
+        <div class="field"><div class="hint">اگر ساکن بیشتر از بدهی‌اش پرداخت کرده، مابه‌التفاوت را اینجا ثبت کنید تا «اعتبار» واحد شود؛ در صدور شارژ ماه‌های بعدی خودکار از آن کسر می‌شود و ساکن همان‌جا می‌بیند.</div></div>
+        ${moneyField({ id: 'cr-amount', label: 'مبلغ اضافه‌پرداخت (تومان)' })}
+        <div class="field"><label>یادداشت</label><input id="cr-note" placeholder="اختیاری — مثلاً واریزی اردیبهشت"></div>
+        ${Math.max(0, Number(unit.credit) || 0) > 0 ? `<div class="field"><div class="hint">اعتبار فعلی واحد: <b style="color:var(--ok)">${fmtMoney(unit.credit)}</b> تومان</div></div>` : ''}
+      </div>`,
+    footer: `<button class="btn subtle" data-maction="cancel">انصراف</button><button class="btn ok" data-maction="go">${icon('wallet', 16)} ثبت اعتبار</button>`,
+    onMount(m) {
+      bindMoneyInputs(m.el);
+      $$('[data-maction]', m.el).forEach(b => b.addEventListener('click', async () => {
+        if (b.dataset.maction === 'cancel') { m.close(); return; }
+        const amount = parseNum($('#cr-amount', m.el).value);
+        if (!(amount > 0)) { toast('مبلغ را وارد کنید', 'err'); return; }
+        b.disabled = true; b.innerHTML = '<span class="spin"></span>';
+        try {
+          const res = await api('/credits', {
+            method: 'POST',
+            body: { unit_id: unit.id, amount, note: $('#cr-note', m.el).value.trim() }
+          });
+          haptic('success');
+          toast(`اعتبار ${fmtMoney(res.registered || amount)} ثبت شد — مانده اعتبار: ${fmtMoney(res.credit_balance || 0)}`, 'ok', 4500);
+          m.close();
+          refresh();
+          if (onDone) onDone();
+        } catch (e) { toast(e.message, 'err'); b.disabled = false; b.innerHTML = `${icon('wallet', 16)} ثبت اعتبار`; }
+      }));
+    }
+  });
 }
 
 // --- resident account management -------------------------------------------
@@ -1421,13 +1478,27 @@ async function confirmClaimFull(id) {
   const okd = await confirmDialog(`کل ماندهٔ بدهی ${unitWord(c.unit_number)} ثبت شود؟\n(مبلغ از قدیمی‌ترین قلم بدهی تسویه می‌شود و اگر چیزی نماند، بدهی واحد صفر می‌شود)`);
   if (!okd) return;
   try {
-    const res = await api(`/claims/${id}/confirm`, { method: 'POST', body: {} });
+    const res = await sendClaimConfirm(id, {});
     haptic('success');
     let msg = `پرداخت کامل ثبت شد (${fmtMoney(res.applied || 0)})`;
+    if (res.credited > 0) msg += ` + اعتبار ${fmtMoney(res.credited)}`;
     if (res.unit_remaining > 0) msg += ` — ماندهٔ بدهی واحد: ${fmtMoney(res.unit_remaining)}`;
     toast(msg, 'ok', 5000);
     refresh();
   } catch (e) { toast(e.message, 'err'); }
+}
+
+// v2.21.0 — ارسال تأیید رسید؛ اگر مبلغ از ماندهٔ بدهی بیشتر باشد (کد
+// 'overpay_possible') مدیر تأیید می‌کند و مابه‌التفاوت به اعتبار واحد می‌رود
+async function sendClaimConfirm(id, body) {
+  try {
+    return await api(`/claims/${id}/confirm`, { method: 'POST', body });
+  } catch (e) {
+    if (e.code !== 'overpay_possible') throw e;
+    const okd = await confirmDialog('مبلغ رسید بیشتر از ماندهٔ بدهی واحد است.\nمابه‌التفاوت به‌عنوان «اعتبار اضافه‌پرداخت» ثبت شود و در شارژ ماه‌های بعدی کسر گردد؟');
+    if (!okd) throw e;
+    return await api(`/claims/${id}/confirm`, { method: 'POST', body: { ...body, overpay: true } });
+  }
 }
 
 // ثبت جزیی — مبلغ دلخواه (هر چقدر بود) و بقیهٔ بدهی می‌ماند
@@ -1443,7 +1514,7 @@ function openClaimPartialModal(id) {
           ${c.note ? `<div class="kv"><span class="k">توضیح ساکن</span><span class="v" style="white-space:normal;text-align:left">${esc(c.note)}</span></div>` : ''}
         </div>
         ${moneyField({ id: 'claim-partial-amount', label: 'مبلغ ثبت‌شده (تومان)', value: Math.round(Number(c.amount) || 0).toLocaleString('en-US') })}
-        <div class="field"><div class="hint">مبلغ از قدیمی‌ترین اقلام بدهی واحد تسویه می‌شود؛ اگر بدهی بماند، برای بعد می‌ماند. فیش را قبل از ثبت با دکمهٔ «مشاهدهٔ فیش واریزی» ببینید.</div></div>
+        <div class="field"><div class="hint">مبلغ از قدیمی‌ترین اقلام بدهی واحد تسویه می‌شود؛ اگر بدهی بماند، برای بعد می‌ماند. اگر مبلغ بیش از ماندهٔ بدهی باشد، مابه‌التفاوت «اعتبار اضافه‌پرداخت» واحد می‌شود. فیش را قبل از ثبت با دکمهٔ «مشاهدهٔ فیش واریزی» ببینید.</div></div>
       </div>`,
     footer: `<button class="btn subtle" data-maction="cancel">انصراف</button><button class="btn" data-maction="save">${icon('wallet', 16)} ثبت پرداخت</button>`,
     onMount(m) {
@@ -1454,9 +1525,10 @@ function openClaimPartialModal(id) {
         if (!(amount > 0)) { toast('مبلغ را وارد کنید', 'err'); return; }
         b.disabled = true; b.innerHTML = '<span class="spin"></span>';
         try {
-          const res = await api(`/claims/${id}/confirm`, { method: 'POST', body: { amount } });
+          const res = await sendClaimConfirm(id, { amount });
           haptic('success');
           let msg = `${fmtMoney(res.applied || 0)} برای واحد ثبت شد`;
+          if (res.credited > 0) msg += ` + اعتبار ${fmtMoney(res.credited)}`;
           if (res.unit_remaining > 0) msg += ` — مانده: ${fmtMoney(res.unit_remaining)}`;
           else msg += ' — بدهی واحد تسویه شد';
           toast(msg, 'ok', 5000);
@@ -1678,7 +1750,9 @@ async function openGenerateModal() {
           let msg = `${faNum(res.created)} قلم شارژ صادر شد`;
           if (subset) msg += ' برای واحدهای انتخابی';
           if (res.skipped) msg += ` (${faNum(res.skipped)} واحد قبلاً صادر شده)`;
-          toast(msg, 'ok', 4200);
+          // v2.21.0 — اعمال خودکار اعتبار اضافه‌پرداخت روی شارژ تازه‌صادره
+          if (res.credit_used_total > 0) msg += ` • اعتبار ${fmtMoney(res.credit_used_total)} برای ${faNum(res.credit_units)} واحد اعمال شد`;
+          toast(msg, 'ok', 5000);
           if (res.no_area && res.no_area.length) toast('واحدهای بدون متراژ رد شدند: ' + res.no_area.join('، '), 'info');
           m.close(); navigate('charges');
         } catch (e) { toast(e.message, 'err'); b.disabled = false; b.textContent = 'صدور'; }
@@ -1691,6 +1765,9 @@ async function openPayModal(debtId, onDone) {
   const debt = state.debtCache[debtId];
   if (!debt) return;
   const remaining = debt.amount - debt.paid_amount;
+  // v2.21.0 — اعتبار واحد (اگر در کش واحدها باشد) برای نمایش در مودال پرداخت
+  const unitRow = (state.unitsCache || []).find(u => u.id === debt.unit_id);
+  const unitCreditBal = Math.max(0, Number(unitRow && unitRow.credit) || 0);
   openModal({
     title: 'ثبت پرداخت — ' + unitWord(debt.unit_number),
     body: `
@@ -1699,8 +1776,10 @@ async function openPayModal(debtId, onDone) {
           <div class="kv"><span class="k">شرح</span><span class="v">${esc(debt.description)}</span></div>
           <div class="kv"><span class="k">مبلغ کل</span><span class="v">${fmtMoney(debt.amount)}</span></div>
           <div class="kv"><span class="k">مانده</span><span class="v" style="color:var(--danger)">${fmtMoney(remaining)}</span></div>
+          ${unitCreditBal > 0 ? `<div class="kv"><span class="k">اعتبار واحد</span><span class="v" style="color:var(--ok)">${fmtMoney(unitCreditBal)}</span></div>` : ''}
         </div>
         ${moneyField({ id: 'pay-amount', label: 'مبلغ پرداخت', value: remaining.toLocaleString('en-US') })}
+        <div class="field"><div class="hint">اگر مبلغ بیش از مانده وارد شود، مابه‌التفاوت به‌عنوان «اعتبار اضافه‌پرداخت» واحد ثبت می‌شود و در شارژ ماه‌های بعدی خودکار کسر می‌گردد.</div></div>
         <div class="field"><label>روش پرداخت</label>
           <select id="pay-method">
             <option>کارت به کارت</option><option>نقدی</option><option>پایا</option><option>سایر</option>
@@ -1715,19 +1794,30 @@ async function openPayModal(debtId, onDone) {
         if (b.dataset.maction === 'cancel') { m.close(); return; }
         const amount = parseNum($('#pay-amount', m.el).value);
         if (amount <= 0) { toast('مبلغ را وارد کنید', 'err'); return; }
+        // v2.21.0 — مبلغ بیشتر از مانده = اضافه‌پرداخت؛ نیاز به تأیید مدیر
+        let overpay = false;
+        if (amount > remaining) {
+          const excess = amount - remaining;
+          const okd = await confirmDialog(`ماندهٔ این قلم ${fmtMoney(remaining)} است.\nمبلغ اضافه (${fmtMoney(excess)}) به‌عنوان «اعتبار اضافه‌پرداخت» واحد ثبت شود و در شارژ ماه‌های بعدی کسر گردد؟`);
+          if (!okd) return;
+          overpay = true;
+        }
         b.disabled = true;
         try {
-          await api(`/debts/${debtId}/pay`, {
+          const res = await api(`/debts/${debtId}/pay`, {
             method: 'POST',
             body: {
               amount,
               method: $('#pay-method', m.el).value,
               date: readJalaaliDate('pay-date'),
-              note: $('#pay-note', m.el).value.trim()
+              note: $('#pay-note', m.el).value.trim(),
+              ...(overpay ? { overpay: true } : {})
             }
           });
           haptic('success');
-          toast('پرداخت ثبت شد', 'ok');
+          let msg = 'پرداخت ثبت شد';
+          if (res.credited > 0) msg = `پرداخت ${fmtMoney(res.applied || 0)} ثبت شد + اعتبار ${fmtMoney(res.credited)} (مانده اعتبار: ${fmtMoney(res.credit_balance || 0)})`;
+          toast(msg, 'ok', 5000);
           m.close();
           if (onDone) onDone(); else navigate(state.view);
         } catch (e) { toast(e.message, 'err'); b.disabled = false; }
@@ -2482,15 +2572,18 @@ async function viewReports() {
   const unitRows = (rep.by_unit || []).map(u => {
     const rem = u.issued - u.paid;
     const rc = Number(u.remind_count || 0);
+    const uc = Math.max(0, Number(u.credit) || 0);
     return `<tr>
       <td>${esc(faNum(u.number))}</td>
       <td>${esc(u.resident_name || '—')}</td>
       <td class="num">${fmtNum(u.issued)}</td>
       <td class="num" style="color:var(--ok)">${fmtNum(u.paid)}</td>
       <td class="num" style="color:${rem > 0 ? 'var(--danger)' : 'var(--muted)'}">${fmtNum(rem)}</td>
+      <td class="num" style="color:${uc > 0 ? 'var(--ok)' : 'var(--muted)'}">${uc > 0 ? fmtNum(uc) : '—'}</td>
       <td class="num" title="${rc && u.last_remind_at ? 'آخرین یادآوری: ' + new Date(u.last_remind_at * 1000).toLocaleDateString('fa-IR') : ''}">${rem > 0 ? (rc ? faNum(rc) + ' بار' : '—') : '—'}</td>
     </tr>`;
   }).join('');
+  const repCredit = Math.max(0, Number(rep.credit_total) || 0);
 
   return `
     <div class="stepper" id="year-stepper">
@@ -2506,9 +2599,14 @@ async function viewReports() {
         <tr class="total"><td>جمع سال</td><td>${fmtNum(tI)}</td><td>${fmtNum(tC)}</td><td>${fmtNum(tI - tC)}</td></tr>
       </tbody></table></div>
 
+    ${repCredit > 0 ? `<div class="card" style="margin:12px 0;padding:10px 12px">
+      <div class="kv"><span class="k">اعتبار اضافه‌پرداخت واحدها</span><span class="v" style="color:var(--ok)">${fmtMoney(repCredit)}</span></div>
+      <div class="hint" style="margin-top:4px">پیش‌پرداخت ساکنینی که بیشتر از بدهی‌شان پرداخت کرده‌اند؛ در صدور شارژ ماه‌های بعدی خودکار کسر می‌شود.</div>
+    </div>` : ''}
+
     <div class="section-title">وضعیت واحدها</div>
     <div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th>واحد</th><th>ساکن</th><th>صادرشده</th><th>وصول</th><th>مانده</th><th>یادآوری</th></tr></thead>
+      <thead><tr><th>واحد</th><th>ساکن</th><th>صادرشده</th><th>وصول</th><th>مانده</th><th>اعتبار</th><th>یادآوری</th></tr></thead>
       <tbody>${unitRows}</tbody></table></div>
 
     <button class="btn block" data-action="pdf-report" style="margin-top:14px">${icon('download', 17)} دانلود گزارش سالانه (PDF)</button>
@@ -2889,6 +2987,17 @@ async function viewMy() {
       </div>
     </div>`).join('');
 
+  // v2.21.0 — اعتبار اضافه‌پرداخت: مانده، ماندهٔ مؤثر پس از اعتبار و تاریخچهٔ دفتر
+  const myCredit = d.credit || { balance: 0, effective_remaining: d.totals.remaining, entries: [] };
+  const creditEntriesHtml = (myCredit.entries || []).slice(0, 6).map(e => `
+    <div class="row" style="padding:7px 0">
+      <div class="badge ${e.amount > 0 ? '' : 'gray'}">${icon(e.amount > 0 ? 'plus' : 'wallet', 15)}</div>
+      <div class="mid">
+        <div class="t1" style="color:${e.amount > 0 ? 'var(--ok)' : 'var(--muted)'}">${e.amount > 0 ? '+' : '−'}${fmtMoney(Math.abs(e.amount))}</div>
+        <div class="t2">${esc(e.note || (e.amount > 0 ? 'ثبت اضافه‌پرداخت' : 'مصرف اعتبار'))} • ${claimDate(e.created_at)}</div>
+      </div>
+    </div>`).join('');
+
   const s = state.settings || {};
   const activePolls = (pollsRes.polls || []).map(normalizePoll).filter(p => p.status === 'open');
   const closedPolls = (pollsRes.polls || []).map(normalizePoll).filter(p => p.status !== 'open').slice(0, 3);
@@ -2907,9 +3016,18 @@ async function viewMy() {
   return `
     <div class="hero">
       <div class="label">مانده بدهی ${unitWord(d.unit.number)}</div>
-      <div class="value ${d.totals.remaining > 0 ? 'bad' : 'ok'}">${fmtMoney(d.totals.remaining)}</div>
+      <div class="value ${myCredit.balance > 0 && myCredit.effective_remaining <= 0 ? 'ok' : (d.totals.remaining > 0 ? 'bad' : 'ok')}">${fmtMoney(myCredit.balance > 0 ? myCredit.effective_remaining : d.totals.remaining)}</div>
       <div class="sub">پرداخت‌شده تا امروز: <b>${fmtMoney(d.totals.paid)}</b> از ${fmtMoney(d.totals.issued)}</div>
+      ${myCredit.balance > 0 ? `<div class="sub" style="color:var(--ok)">اعتبار اضافه‌پرداخت شما: <b>${fmtMoney(myCredit.balance)}</b> تومان — از شارژ ماه‌های بعدی کسر می‌شود</div>` : ''}
     </div>
+    ${myCredit.balance > 0 || (myCredit.entries || []).length ? `
+    <div class="section-title">اعتبار اضافه‌پرداخت</div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="kv"><span class="k">اعتبار فعلی</span><span class="v" style="color:var(--ok)">${fmtMoney(myCredit.balance)}</span></div>
+      ${myCredit.balance > 0 ? `<div class="kv"><span class="k">مانده پس از کسر اعتبار</span><span class="v">${fmtMoney(myCredit.effective_remaining)}</span></div>` : ''}
+      <div class="hint" style="margin-top:6px">اگر بیشتر از بدهی‌تان پرداخت کرده باشید، مابه‌التفاوت «اعتبار» می‌شود و مدیر ساختمان در صدور شارژ ماه‌های بعدی به‌صورت خودکار از آن کسر می‌کند؛ یعنی ماه بعد به همان اندازه شارژ کمتری می‌پردازید.</div>
+      ${creditEntriesHtml ? `<div style="margin-top:6px;border-top:1px solid var(--line);padding-top:4px">${creditEntriesHtml}</div>` : ''}
+    </div>` : ''}
     <div class="section-title">رسید پرداخت شارژ</div>
     <div class="card" style="margin-bottom:14px">
       <div class="hint">پس از پرداخت شارژ، <b>فیش واریزی</b> خود را اینجا بارگذاری کنید و در توضیح بنویسید که شارژ را کامل پرداخت کرده‌اید یا چه مبلغی پرداخت کرده‌اید. مدیر ساختمان با پیام تلگرام باخبر می‌شود، فیش را بررسی می‌کند و پرداخت شما را کامل یا جزیی ثبت می‌کند؛ اگر بدهی بماند، برای بعد می‌ماند.</div>
@@ -2994,6 +3112,7 @@ async function viewMyReports() {
     </tr>`;
   }).join('');
   const remaining = Math.max(0, tI - tP);
+  const myRepCredit = d.credit || { balance: 0, effective_remaining: remaining };
 
   return `
     <div class="stepper" id="myrep-stepper">
@@ -3004,8 +3123,8 @@ async function viewMyReports() {
 
     <div class="hero">
       <div class="label">مانده سال ${faNum(jy)} — ${unitWord(d.unit.number)}</div>
-      <div class="value ${remaining > 0 ? 'bad' : 'ok'}">${fmtMoney(remaining)}</div>
-      <div class="sub">شارژ سال: <b>${fmtMoney(tI)}</b> • پرداخت‌شده: <b>${fmtMoney(tP)}</b></div>
+      <div class="value ${myRepCredit.balance > 0 && myRepCredit.effective_remaining <= 0 ? 'ok' : (remaining > 0 ? 'bad' : 'ok')}">${fmtMoney(myRepCredit.balance > 0 ? myRepCredit.effective_remaining : remaining)}</div>
+      <div class="sub">شارژ سال: <b>${fmtMoney(tI)}</b> • پرداخت‌شده: <b>${fmtMoney(tP)}</b>${myRepCredit.balance > 0 ? ` • اعتبار شما: <b style="color:var(--ok)">${fmtMoney(myRepCredit.balance)}</b>` : ''}</div>
     </div>
 
     <div class="section-title">روند ماهانه واحد شما</div>
@@ -3365,6 +3484,35 @@ const actions = {
     try {
       await api(`/debts/${id}/unpay`, { method: 'POST', body: {} });
       toast('پرداخت لغو شد', 'ok');
+      if (el.closest('.sheet')) { const unitId = Number(el.closest('.sheet').querySelector('[data-maction="unit-edit"]')?.dataset.id); refresh(); if (unitId) setTimeout(() => openUnitModal(unitId), 150); }
+      else navigate(state.view);
+    } catch (e) { toast(e.message, 'err'); }
+  },
+  // v2.21.0 — اعمال اعتبار واحد روی یک قلم باز (پیش‌پرداخت)
+  'credit-apply': async el => {
+    const id = Number(el.dataset.id);
+    const debt = state.debtCache[id];
+    if (!debt) return;
+    const okd = await confirmDialog('اعتبار واحد روی این قلم اعمال شود؟\n(تا سقف اعتبار یا ماندهٔ همین قلم — هر کدام کمتر باشد)');
+    if (!okd) return;
+    try {
+      const res = await api('/credits/apply', { method: 'POST', body: { debt_id: id } });
+      haptic('success');
+      let msg = `${fmtMoney(res.used || 0)} از اعتبار روی این قلم اعمال شد`;
+      if (res.credit_balance != null) msg += ` — اعتبار باقی‌مانده: ${fmtMoney(res.credit_balance)}`;
+      toast(msg, 'ok', 4500);
+      if (el.closest('.sheet')) { const unitId = Number(el.closest('.sheet').querySelector('[data-maction="unit-edit"]')?.dataset.id); refresh(); if (unitId) setTimeout(() => openUnitModal(unitId), 150); }
+      else navigate(state.view);
+    } catch (e) { toast(e.message, 'err'); }
+  },
+  // v2.21.0 — حذف ردیف ثبتِ اشتباه از دفتر اعتبار (فقط ردیف‌های «ثبت»)
+  'credit-del': async el => {
+    const id = Number(el.dataset.id);
+    const okd = await confirmDialog('این ردیف اضافه‌پرداخت حذف شود؟\n(فقط ثبتِ اشتباه حذف می‌شود؛ مصرف‌های اعتبار دست‌نخورده می‌مانند)');
+    if (!okd) return;
+    try {
+      const res = await api('/credits/' + id, { method: 'DELETE', body: {} });
+      toast('حذف شد — اعتبار فعلی: ' + fmtMoney(res.credit_balance || 0), 'ok');
       if (el.closest('.sheet')) { const unitId = Number(el.closest('.sheet').querySelector('[data-maction="unit-edit"]')?.dataset.id); refresh(); if (unitId) setTimeout(() => openUnitModal(unitId), 150); }
       else navigate(state.view);
     } catch (e) { toast(e.message, 'err'); }

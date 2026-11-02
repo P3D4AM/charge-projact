@@ -68,6 +68,18 @@ export function ensureSchema(env) {
     await ensure(env, 'users', 'is_resident', 'ALTER TABLE users ADD COLUMN is_resident INTEGER NOT NULL DEFAULT 1');
     // v10-outgoing-messages.sql (v2.19.0) — ثبت پیام‌های ارسالی ربات کنار دریافتی‌ها
     await ensure(env, 'bot_messages', 'direction', "ALTER TABLE bot_messages ADD COLUMN direction TEXT NOT NULL DEFAULT 'in'");
+    // v11-credits.sql (v2.21.0) — دفتر اعتبار اضافه‌پرداخت روی دیتابیس‌های قدیمی هم ساخته شود
+    await ensure(env, 'unit_credits', 'id', `CREATE TABLE IF NOT EXISTS unit_credits (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      unit_id     INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+      amount      INTEGER NOT NULL,
+      kind        TEXT NOT NULL DEFAULT 'add',
+      debt_id     INTEGER,
+      period      TEXT DEFAULT '',
+      note        TEXT DEFAULT '',
+      created_by  INTEGER,
+      created_at  INTEGER NOT NULL
+    )`);
   })();
   return env[PROBE];
 }

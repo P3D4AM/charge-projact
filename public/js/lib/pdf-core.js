@@ -445,17 +445,24 @@ export async function buildStatementPdf({ lib, fontkit, fonts, data }) {
   }
 
   // totals tiles — اگر جا برای جمع کل + باکس پرداخت نیست، صفحه جدید
+  // v2.21.0 — وقتی واحد اعتبار اضافه‌پرداخت دارد: کاشی «اعتبار» و «مانده پس از اعتبار»
   const t = data.totals || {};
-  if (y - 152 < M) { page = doc.addPage([A4.w, A4.h]); y = A4.h - M; }
+  const hasCredit = Number(t.credit) > 0;
+  if (y - (hasCredit ? 152 : 152) < M) { page = doc.addPage([A4.w, A4.h]); y = A4.h - M; }
   y -= 8;
   y = drawTiles(page, rgb, {
     fonts: F, y,
-    tiles: [
+    tiles: hasCredit ? [
+      { label: 'جمع صادرشده (تومان)', value: faMoney(t.issued || 0) },
+      { label: 'جمع پرداختی (تومان)', value: faMoney(t.paid || 0) },
+      { label: 'اعتبار اضافه‌پرداخت (تومان)', value: faMoney(t.credit || 0) },
+      { label: 'مانده پس از اعتبار (تومان)', value: faMoney(Math.max(0, Number(t.remaining_after_credit ?? t.remaining) || 0)) }
+    ] : [
       { label: 'جمع صادرشده (تومان)', value: faMoney(t.issued || 0) },
       { label: 'جمع پرداختی (تومان)', value: faMoney(t.paid || 0) },
       { label: 'مانده کل (تومان)', value: faMoney(t.remaining || 0) }
     ],
-    highlightIndex: 2
+    highlightIndex: hasCredit ? 3 : 2
   });
 
   y -= 2;
@@ -532,10 +539,12 @@ export async function buildYearReportPdf({ lib, fontkit, fonts, data }) {
 
   const unitCols = [
     { title: 'واحد', w: 46, align: 'center', render: r => faDigits(stripUnitWord(r.number)) },
-    { title: 'ساکن', w: 110, render: r => r.resident_name || '—' },
+    { title: 'ساکن', w: 96, render: r => r.resident_name || '—' },
     { title: 'صادرشده (تومان)', w: 90, align: 'center', render: r => faMoney(r.issued) },
     { title: 'پرداختی', w: 90, align: 'center', render: r => faMoney(r.paid) },
     { title: 'مانده', w: 90, align: 'center', render: r => faMoney(Math.max(0, r.issued - r.paid)) },
+    // v2.21.0 — اعتبار اضافه‌پرداخت واحد (پیش‌پرداخت ماه‌های بعد)
+    { title: 'اعتبار', w: 74, align: 'center', render: r => (r.credit > 0 ? faMoney(r.credit) : '—') },
     { title: 'وضعیت', w: 64, align: 'center',
       render: r => (r.issued - r.paid) <= 0 ? 'تسویه‌شده' : 'بدهکار',
       color: r => (r.issued - r.paid) <= 0 ? C.green : C.red }
@@ -550,10 +559,12 @@ export async function buildYearReportPdf({ lib, fontkit, fonts, data }) {
   // unit totals
   const uIssued = unitRows.reduce((s, r) => s + (r.issued || 0), 0);
   const uPaid = unitRows.reduce((s, r) => s + (r.paid || 0), 0);
+  const uCredit = unitRows.reduce((s, r) => s + (r.credit || 0), 0);
   rect(page, rgb, { x: M, y: y - rowH, w: A4.w - 2 * M, h: rowH, color: C.accentSoft, border: C.line });
   const uCols2 = [
-    { t: 'جمع کل', w: 46 }, { t: '', w: 110 }, { t: faMoney(uIssued), w: 90 },
-    { t: faMoney(uPaid), w: 90 }, { t: faMoney(uIssued - uPaid), w: 90 }, { t: '', w: 64 }
+    { t: 'جمع کل', w: 46 }, { t: '', w: 96 }, { t: faMoney(uIssued), w: 90 },
+    { t: faMoney(uPaid), w: 90 }, { t: faMoney(uIssued - uPaid), w: 90 },
+    { t: uCredit > 0 ? faMoney(uCredit) : '', w: 74 }, { t: '', w: 64 }
   ];
   right = A4.w - M;
   for (const c of uCols2) {
@@ -590,11 +601,19 @@ export async function buildMonthlyReportPdf({ lib, fontkit, fonts, data }) {
     dateStr
   });
 
-  const t = data.totals || { issued: 0, collected: 0, remaining: 0 };
+  const t = data.totals || { issued: 0, collected: 0, remaining: 0, credit_total: 0 };
   y -= 18;
+  // v2.21.0 — کاشی «اعتبار اضافه‌پرداخت» فقط وقتی اعتباری در کار است
+  const hasCredit = Number(t.credit_total) > 0;
   y = drawTiles(page, rgb, {
     fonts: F, y,
-    tiles: [
+    tiles: hasCredit ? [
+      { label: 'صادرشده ماه (تومان)', value: faMoney(t.issued || 0) },
+      { label: 'وصول‌شده', value: faMoney(t.collected || 0) },
+      { label: 'مانده', value: faMoney(t.remaining || 0) },
+      { label: 'اعتبار واحدها (تومان)', value: faMoney(t.credit_total || 0) },
+      { label: 'درصد وصول', value: t.issued > 0 ? faDigits(Math.round((t.collected / t.issued) * 100)) + '٪' : '—' }
+    ] : [
       { label: 'صادرشده ماه (تومان)', value: faMoney(t.issued || 0) },
       { label: 'وصول‌شده', value: faMoney(t.collected || 0) },
       { label: 'مانده', value: faMoney(t.remaining || 0) },
@@ -609,11 +628,13 @@ export async function buildMonthlyReportPdf({ lib, fontkit, fonts, data }) {
 
   const unitCols = [
     { title: 'واحد', w: 42, align: 'center', render: r => faDigits(stripUnitWord(r.number)) },
-    { title: 'ساکن', w: 92, render: r => r.resident_name || '—' },
+    { title: 'ساکن', w: 80, render: r => r.resident_name || '—' },
     { title: 'اقلام', w: 34, align: 'center', render: r => faDigits(r.items || 0) },
     { title: 'صادرشده (تومان)', w: 76, align: 'center', render: r => faMoney(r.issued || 0) },
     { title: 'پرداختی', w: 76, align: 'center', render: r => faMoney(r.paid || 0) },
     { title: 'مانده', w: 76, align: 'center', render: r => faMoney(Math.max(0, (r.issued || 0) - (r.paid || 0))) },
+    // v2.21.0 — اعتبار اضافه‌پرداخت واحد
+    { title: 'اعتبار', w: 72, align: 'center', render: r => (r.credit > 0 ? faMoney(r.credit) : '—') },
     { title: 'وضعیت', w: 56, align: 'center',
       render: r => !(r.issued > 0) ? 'قلمی ندارد' : ((r.issued - r.paid) <= 0 ? 'تسویه‌شده' : 'بدهکار'),
       color: r => !(r.issued > 0) ? C.muted : ((r.issued - r.paid) <= 0 ? C.green : C.red) },
@@ -632,11 +653,14 @@ export async function buildMonthlyReportPdf({ lib, fontkit, fonts, data }) {
   const rowH = 20;
   const uIssued = unitRows.reduce((s, r) => s + (r.issued || 0), 0);
   const uPaid = unitRows.reduce((s, r) => s + (r.paid || 0), 0);
+  const uCredit = unitRows.reduce((s, r) => s + (r.credit || 0), 0);
   rect(page, rgb, { x: M, y: y - rowH, w: A4.w - 2 * M, h: rowH, color: C.accentSoft, border: C.line });
   const uCols2 = [
-    { t: 'جمع کل', w: 42 }, { t: '', w: 92 }, { t: '', w: 34 },
+    { t: 'جمع کل', w: 42 }, { t: '', w: 80 }, { t: '', w: 34 },
     { t: faMoney(uIssued), w: 76 }, { t: faMoney(uPaid), w: 76 },
-    { t: faMoney(Math.max(0, uIssued - uPaid)), w: 76 }, { t: '', w: 56 }, { t: '', w: 92 }
+    { t: faMoney(Math.max(0, uIssued - uPaid)), w: 76 },
+    { t: uCredit > 0 ? faMoney(uCredit) : '', w: 72 },
+    { t: '', w: 56 }, { t: '', w: 92 }
   ];
   let right = A4.w - M;
   const scaleW = (A4.w - 2 * M) / unitCols.reduce((s, c) => s + c.w, 0);

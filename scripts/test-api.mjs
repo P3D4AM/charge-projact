@@ -1885,4 +1885,150 @@ const period = currentPeriod();
   assert.ok(my20.d.totals.remaining > 0, 'manager sees own unit debt');
 }
 
+// ---------- 21) v2.21.0 — اعتبار اضافه‌پرداخت (دفتر unit_credits) ----------
+// بلوک مستقل با env تازه: ثبت دستی → پرداخت بیش از مانده (با/بدون overpay) →
+// اعمال دستی → مصرف خودکار در صدور شارژ → رسید با اضافه‌پرداخت → گزارش‌ها و بکاپ
+{
+  const env = makeEnv();
+  const TINY_PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const inst = await j(await handleApi(req('/install', {
+    method: 'POST', body: { building_name: 'برج اعتبار', username: 'Admin', password: 'admin123' }
+  }), env));
+  assert.ok([200, 201].includes(inst.s), 'install ok');
+  const adminT = inst.d.token;
+  await j(await handleApi(req('/a/managers', { method: 'POST', body: { username: 'cmgr', password: 'manager123', full_name: 'مدیر اعتبار' }, token: adminT }), env));
+  const mT = (await j(await handleApi(req('/auth/login', { method: 'POST', body: { username: 'cmgr', password: 'manager123' } }), env))).d.token;
+  assert.ok(mT);
+
+  // واحد ۶۰ با ساکن + واحد ۶۱
+  const u60 = await j(await handleApi(req('/units', { method: 'POST', body: { number: '60', resident_name: 'ساکن شصت' }, token: mT }), env));
+  const u60id = u60.d.unit.id;
+  await j(await handleApi(req('/residents', { method: 'POST', body: { username: 'cres60', password: '123456', unit_id: u60id, full_name: 'ساکن شصت' }, token: mT }), env));
+  const resT = (await j(await handleApi(req('/auth/login', { method: 'POST', body: { username: 'cres60', password: '123456' } }), env))).d.token;
+  const u61 = await j(await handleApi(req('/units', { method: 'POST', body: { number: '61', resident_name: 'ساکن شصت‌ویک' }, token: mT }), env));
+  const u61id = u61.d.unit.id;
+
+  // (الف) RBAC: ساکن اجازهٔ ثبت اعتبار ندارد؛ ورودی نامعتبر رد می‌شود
+  const r403 = await j(await handleApi(req('/credits', { method: 'POST', body: { unit_id: u60id, amount: 1000 }, token: resT }), env));
+  assert.equal(r403.s, 403, 'resident cannot register credit');
+  const bad0 = await j(await handleApi(req('/credits', { method: 'POST', body: { unit_id: u60id, amount: 0 }, token: mT }), env));
+  assert.equal(bad0.s, 400);
+  const badUnit = await j(await handleApi(req('/credits', { method: 'POST', body: { unit_id: 999999, amount: 1000 }, token: mT }), env));
+  assert.equal(badUnit.s, 404);
+
+  // (ب) ثبت دستی اضافه‌پرداخت ۲۰۰٬۰۰۰ → ماندهٔ اعتبار واحد ۲۰۰٬۰۰۰
+  const reg = await j(await handleApi(req('/credits', { method: 'POST', body: { unit_id: u60id, amount: 200000, note: 'واریزی اضافه' }, token: mT }), env));
+  assert.equal(reg.s, 201, 'credit registered');
+  assert.equal(reg.d.credit_balance, 200000);
+  assert.equal(reg.d.registered, 200000);
+
+  // (ج) قلم ۵۰۰٬۰۰۰؛ پرداخت ۶۰۰٬۰۰۰ بدون overpay → ۴۰۰ overpay_possible؛ با overpay → اعتبار ۱۰۰٬۰۰۰
+  const d60 = await j(await handleApi(req('/debts', { method: 'POST', body: { unit_id: u60id, period: '1300-02', amount: 500000, description: 'شارژ اعتبار' }, token: mT }), env));
+  assert.equal(d60.s, 201);
+  const noOver = await j(await handleApi(req(`/debts/${d60.d.debt.id}/pay`, { method: 'POST', body: { amount: 600000 }, token: mT }), env));
+  assert.equal(noOver.s, 400, 'overpay without flag rejected');
+  assert.equal(noOver.d.code, 'overpay_possible');
+  const over = await j(await handleApi(req(`/debts/${d60.d.debt.id}/pay`, { method: 'POST', body: { amount: 600000, overpay: true, method: 'کارت به کارت' }, token: mT }), env));
+  assert.equal(over.s, 200, 'overpay accepted with flag');
+  assert.equal(over.d.applied, 500000, 'debt capped at remaining');
+  assert.equal(over.d.credited, 100000, 'excess became credit');
+  assert.equal(over.d.debt.status, 'paid');
+  assert.equal(over.d.credit_balance, 300000, 'balance 200k + 100k');
+
+  // (د) ساکن اعتبار را می‌بیند: my/summary + my/credit با تاریخچهٔ ۲ ردیف
+  const sum = await j(await handleApi(req('/my/summary', { token: resT }), env));
+  assert.equal(sum.d.credit.balance, 300000);
+  assert.equal(sum.d.credit.effective_remaining, 0, 'no debt left so effective = 0');
+  assert.equal(sum.d.credit.entries.length, 2, 'ledger history visible to resident');
+  const myc = await j(await handleApi(req('/my/credit', { token: resT }), env));
+  assert.equal(myc.s, 200); assert.equal(myc.d.balance, 300000);
+
+  // (هـ) حذف ردیف ثبت ۱۰۰هزار → مانده ۲۰۰هزار؛ دیتای دفتر سالم
+  const listC = await j(await handleApi(req('/credits?unit_id=' + u60id, { token: mT }), env));
+  assert.equal(listC.d.entries.length, 2);
+  assert.ok(!listC.d.entries.some(e => e.kind === 'consume'), 'no consume row yet in this unit');
+  const addRow = listC.d.entries.find(e => e.kind === 'add' && e.amount === 100000);
+  const delAdd = await j(await handleApi(req('/credits/' + addRow.id, { method: 'DELETE', token: mT }), env));
+  assert.equal(delAdd.s, 200);
+  assert.equal(delAdd.d.credit_balance, 200000, 'balance back to first add row');
+
+  // (و) قلم باز ۴۰۰٬۰۰۰ → اعمال دستی اعتبار: min(۲۰۰هزار، ۴۰۰هزار) = ۲۰۰هزار
+  const d60b = await j(await handleApi(req('/debts', { method: 'POST', body: { unit_id: u60id, period: '1300-03', amount: 400000, description: 'قلم دوم' }, token: mT }), env));
+  const apply = await j(await handleApi(req('/credits/apply', { method: 'POST', body: { debt_id: d60b.d.debt.id }, token: mT }), env));
+  assert.equal(apply.s, 200, 'credit applied');
+  assert.equal(apply.d.used, 200000);
+  assert.equal(apply.d.debt.status, 'partial');
+  assert.equal(apply.d.credit_balance, 0);
+  const applyAgain = await j(await handleApi(req('/credits/apply', { method: 'POST', body: { debt_id: d60b.d.debt.id }, token: mT }), env));
+  assert.equal(applyAgain.s, 409); assert.equal(applyAgain.d.code, 'no_credit');
+  const consumeList = await j(await handleApi(req('/credits?unit_id=' + u60id, { token: mT }), env));
+  const consumeRow = consumeList.d.entries.find(e => e.kind === 'consume');
+  assert.ok(consumeRow && consumeRow.amount === -200000, 'consume row written to the ledger');
+  const delConsume = await j(await handleApi(req('/credits/' + consumeRow.id, { method: 'DELETE', token: mT }), env));
+  assert.equal(delConsume.s, 409); assert.equal(delConsume.d.code, 'consume_locked', 'consume rows are locked');
+  const addRow2 = consumeList.d.entries.find(e => e.kind === 'add');
+  const delAdd2 = await j(await handleApi(req('/credits/' + addRow2.id, { method: 'DELETE', token: mT }), env));
+  assert.equal(delAdd2.s, 409); assert.equal(delAdd2.d.code, 'already_consumed', 'consumed add row is locked — ledger stays consistent');
+
+  // (ز) مصرف خودکار در صدور شارژ: واحد ۶۱ اعتبار ۱۵۰هزار دارد؛ شارژ ۴۰۰هزار → پیش‌پرداخت کامل
+  await j(await handleApi(req('/credits', { method: 'POST', body: { unit_id: u61id, amount: 400000, note: 'پیش‌پرداخت ۶۱' }, token: mT }), env));
+  const gen = await j(await handleApi(req('/charges/generate', { method: 'POST', body: { period: '1300-04', mode: 'fixed', amount: 400000 }, token: mT }), env));
+  assert.equal(gen.s, 200);
+  assert.equal(gen.d.created, 2, 'both units got a charge');
+  assert.equal(gen.d.credit_units, 1);
+  assert.equal(gen.d.credit_used_total, 400000, 'credit auto-consumed on generation');
+  const d61 = await j(await handleApi(req('/debts?unit_id=' + u61id + '&period=1300-04', { token: mT }), env));
+  const d61row = d61.d.debts.find(x => x.kind === 'monthly');
+  assert.equal(d61row.paid_amount, 400000);
+  assert.equal(d61row.status, 'paid');
+  assert.equal(d61row.method, 'اعتبار اضافه‌پرداخت', 'auto-consume marked on the debt');
+
+  // (ح) رسید با مبلغ بیشتر از مانده → ۴۰۰ overpay_possible → با overpay → اعتبار
+  await j(await handleApi(req('/residents', { method: 'POST', body: { username: 'cres61', password: '123456', unit_id: u61id, full_name: 'ساکن شصت‌ویک' }, token: mT }), env));
+  const res61T = (await j(await handleApi(req('/auth/login', { method: 'POST', body: { username: 'cres61', password: '123456' } }), env))).d.token;
+  const d61c = await j(await handleApi(req('/debts', { method: 'POST', body: { unit_id: u61id, period: '1300-06', amount: 70000, description: 'قلم رسید' }, token: mT }), env));
+  const claim61 = await j(await handleApi(req('/claims', {
+    method: 'POST',
+    body: { amount: 120000, note: '۱۲۰هزار پرداخت کردم', file: { name: 'f.png', mime: 'image/png', size: 70, data_b64: TINY_PNG_1PX } },
+    token: res61T
+  }), env));
+  assert.equal(claim61.s, 201, 'claim 61 created');
+  const confNo = await j(await handleApi(req(`/claims/${claim61.d.claim.id}/confirm`, { method: 'POST', body: { amount: 120000 }, token: mT }), env));
+  assert.equal(confNo.s, 400); assert.equal(confNo.d.code, 'overpay_possible', 'claim overpay needs flag');
+  const confYes = await j(await handleApi(req(`/claims/${claim61.d.claim.id}/confirm`, { method: 'POST', body: { amount: 120000, overpay: true }, token: mT }), env));
+  assert.equal(confYes.s, 200);
+  assert.equal(confYes.d.applied, 70000, 'FIFO applied exactly the remaining debt');
+  assert.equal(confYes.d.credited, 50000, 'excess became credit');
+  assert.equal(confYes.d.credit_balance, 50000, 'exhausted before, 50k excess now');
+
+  // (ط) گزارش‌ها: /units credit، /dashboard، /reports/year، /reports/month
+  const units = await j(await handleApi(req('/units', { token: mT }), env));
+  const u61row = units.d.units.find(u => u.id === u61id);
+  assert.equal(u61row.credit, 50000, 'units list carries credit');
+  const dash = await j(await handleApi(req('/dashboard', { token: mT }), env));
+  assert.equal(dash.d.credit_total, 50000, 'dashboard credit_total');
+  const yr = await j(await handleApi(req('/reports/year?jy=1300', { token: mT }), env));
+  const yr61 = yr.d.by_unit.find(u => u.id === u61id);
+  assert.equal(yr61.credit, 50000);
+  assert.equal(yr.d.credit_total, 50000);
+  const mo = await j(await handleApi(req('/reports/month?period=1300-04', { token: mT }), env));
+  assert.equal(mo.d.totals.credit_total, 50000, 'monthly report credit_total');
+  assert.equal(mo.d.by_unit.find(u => u.id === u61id).credit, 50000);
+
+  // (ی) خروجی بدهکاران: ستون اعتبار + مانده پس از اعتبار (CSV)
+  const exp = await handleApi(req('/export?type=debtors', { token: mT }), env);
+  const expText = await exp.text();
+  assert.ok(expText.includes('اعتبار واحد'), 'debtors export has credit column');
+  assert.ok(expText.includes('مانده پس از اعتبار'), 'debtors export has effective column');
+
+  // (ک) پشتیبان JSON شامل unit_credits + بازیابی round-trip
+  const bk = await j(await handleApi(req('/export?type=backup', { token: mT }), env));
+  assert.ok(Array.isArray(bk.d.unit_credits) && bk.d.unit_credits.length >= 4, 'backup includes unit_credits');
+  const imp = await j(await handleApi(req('/import', { method: 'POST', body: bk.d, token: mT }), env));
+  assert.equal(imp.s, 200, 'import ok');
+  assert.ok(imp.d.imported.unit_credits >= 4, 'import restores unit_credits');
+  const unitsAfter = await j(await handleApi(req('/units', { token: mT }), env));
+  assert.equal(unitsAfter.d.units.find(u => u.id === u61id).credit, 50000, 'credit survives restore');
+}
+
 console.log('test-api: ALL PASSED ✓');

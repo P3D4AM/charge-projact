@@ -13,6 +13,7 @@ import { buildStatementPdf } from './pdf.js';
 import { getBotToken } from './telegram.js';
 import { logVisit } from './visits.js';
 import { ensureSchema } from './migrate.js';
+import { unitCredit, creditEntries } from './credits.js';
 
 // register route groups (side-effect route() registration)
 import './manager.js';
@@ -22,6 +23,7 @@ import './visits.js';
 import './tasks.js';
 import './claims.js';
 import './invites.js';
+import './credits.js';
 
 // ---------------------------------------------------------------------------
 // PUBLIC
@@ -169,13 +171,24 @@ route('GET', '/my/summary', async (c) => {
   const debts = results || [];
   const issued = debts.reduce((s, d) => s + d.amount, 0);
   const paid = debts.reduce((s, d) => s + d.paid_amount, 0);
+  // v2.21.0 — اعتبار اضافه‌پرداخت: مانده و تاریخچهٔ دفتر اعتبار واحد
+  const [credit, cEntries] = await Promise.all([
+    unitCredit(c.env, unit.id),
+    creditEntries(c.env, unit.id, 20)
+  ]);
   return json({
     unit: {
       id: unit.id, number: unit.number, resident_name: unit.resident_name,
       area_m2: unit.area_m2, residents_count: unit.residents_count
     },
     debts,
-    totals: { issued, paid, remaining: Math.max(0, issued - paid) }
+    totals: { issued, paid, remaining: Math.max(0, issued - paid) },
+    // اعتبار فعلی + ماندهٔ مؤثر پس از کسر اعتبار (برای ماه‌های بعدی)
+    credit: {
+      balance: credit,
+      effective_remaining: Math.max(0, (issued - paid) - credit),
+      entries: cEntries
+    }
   });
 }, 'user');
 
@@ -216,6 +229,7 @@ route('GET', '/pdf/statement', async (c) => {
   const debts = results || [];
   const issued = debts.reduce((s, d) => s + d.amount, 0);
   const paid = debts.reduce((s, d) => s + d.paid_amount, 0);
+  const credit = await unitCredit(c.env, unitId);
   const s = await getSettings(c.env);
 
   const pdfBytes = await buildStatementPdf(c.env, {
@@ -223,7 +237,13 @@ route('GET', '/pdf/statement', async (c) => {
     address: s.address || '',
     unit,
     debts,
-    totals: { issued, paid, remaining: Math.max(0, issued - paid) },
+    totals: {
+      issued, paid,
+      remaining: Math.max(0, issued - paid),
+      // v2.21.0 — اعتبار اضافه‌پرداخت و ماندهٔ مؤثر پس از کسر آن
+      credit,
+      remaining_after_credit: Math.max(0, (issued - paid) - credit)
+    },
     settings: { bank_card: s.bank_card, bank_owner: s.bank_owner, phone: s.phone },
     generated_at: now()
   });

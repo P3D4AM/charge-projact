@@ -16,6 +16,7 @@ import {
   runAutoReminder, readAutoCfg, autoRemindStats, rememberAppUrl,
   renderRemindText, DEFAULT_REMIND_TEXT
 } from './scheduler.js';
+import { registerCredit, unitCredit, unitDebtRemaining, autoConsumeCredit, creditTotal } from './credits.js';
 
 // ---------------------------------------------------------------------------
 // UNITS
@@ -30,6 +31,7 @@ route('GET', '/units', async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT u.*,
            COALESCE(t.issued, 0) AS issued, COALESCE(t.paid, 0) AS paid,
+           COALESCE(cr.credit, 0) AS credit,
            acc.id AS account_id, acc.username AS account_username,
            acc.is_active AS account_active, acc.telegram_user_id AS account_telegram
     FROM units u
@@ -37,6 +39,10 @@ route('GET', '/units', async (c) => {
       SELECT unit_id, SUM(amount) AS issued, SUM(paid_amount) AS paid
       FROM debts GROUP BY unit_id
     ) t ON t.unit_id = u.id
+    LEFT JOIN (
+      SELECT unit_id, SUM(amount) AS credit
+      FROM unit_credits GROUP BY unit_id
+    ) cr ON cr.unit_id = u.id
     LEFT JOIN users acc ON acc.unit_id = u.id AND acc.role = 'resident'
     ORDER BY LENGTH(u.number), u.number
   `).all();
@@ -57,6 +63,7 @@ route('GET', '/units', async (c) => {
   const units = (results || []).map(r => ({
     ...r,
     debt: Math.max(0, (r.issued || 0) - (r.paid || 0)),
+    credit: Math.max(0, Number(r.credit) || 0),
     has_account: Boolean(r.account_id),
     manager_account: mgrByUnit.get(r.id) || null
   }));
@@ -324,7 +331,35 @@ route('POST', '/charges/generate', async (c) => {
     }
   }
   if (stmts.length) await c.env.DB.batch(stmts);
-  return json({ created: stmts.length, skipped: existingSet.size, no_area: noArea });
+
+  // v2.21.0 — مصرف خودکار اعتبار اضافه‌پرداخت: قلم شارژِ تازه‌صادرهٔ هر واحدی که
+  // اعتبار دارد تا سقف اعتبارش «پیش‌پرداخت» می‌شود (ساکن همان اول می‌بیند که
+  // برای این ماه چقدر باید بپردازد). ترتیبی — تلهٔ concurrency در D1.
+  let creditUsedTotal = 0;
+  let creditUnits = 0;
+  const newUnits = targets.filter(u => !existingSet.has(u.id));
+  if (newUnits.length) {
+    const marks = newUnits.map(() => '?').join(',');
+    const { results: newDebts } = await c.env.DB.prepare(
+      `SELECT id, unit_id, amount, paid_amount FROM debts WHERE period = ? AND kind = 'monthly' AND unit_id IN (${marks})`
+    ).bind(period, ...newUnits.map(u => u.id)).all();
+    const byUnit = new Map();
+    for (const d of newDebts || []) {
+      if (!byUnit.has(d.unit_id)) byUnit.set(d.unit_id, []);
+      byUnit.get(d.unit_id).push(d);
+    }
+    for (const u of newUnits) {
+      const rows = byUnit.get(u.id) || [];
+      if (!rows.length) continue;
+      const { used } = await autoConsumeCredit(c.env, u.id, { period });
+      if (used > 0) { creditUsedTotal += used; creditUnits++; }
+    }
+  }
+
+  return json({
+    created: stmts.length, skipped: existingSet.size, no_area: noArea,
+    credit_used_total: creditUsedTotal, credit_units: creditUnits
+  });
 }, 'manager');
 
 route('POST', '/debts/:id/pay', async (c) => {
@@ -337,9 +372,15 @@ route('POST', '/debts/:id/pay', async (c) => {
   const b = c.body || {};
   let amt = b.amount == null ? remaining : Math.round(Number(b.amount) || 0);
   if (!(amt > 0)) return fail('مبلغ نامعتبر است');
-  if (amt > remaining) return fail('مبلغ بیشتر از مانده بدهی است');
+  // v2.21.0 — اضافه‌پرداخت: اگر مبلغ از مانده بیشتر باشد، مودی باید صریحاً تأیید کند
+  // (overpay=true) تا مابه‌التفاوت به‌عنوان اعتبار اضافه‌پرداخت واحد ثبت شود.
+  if (amt > remaining && !b.overpay) {
+    return fail('مبلغ بیشتر از مانده بدهی است؛ مابه‌التفاوت به‌عنوان اعتبار اضافه‌پرداخت ثبت شود؟', 400, 'overpay_possible');
+  }
+  const applied = Math.min(amt, remaining);
+  const excess = amt - applied;
 
-  const paid = debt.paid_amount + amt;
+  const paid = debt.paid_amount + applied;
   const status = paid >= debt.amount ? 'paid' : 'partial';
   const paidAt = b.date ? Number(b.date) || now() : now();
   const method = String(b.method || '').slice(0, 50);
@@ -349,10 +390,22 @@ route('POST', '/debts/:id/pay', async (c) => {
     'UPDATE debts SET paid_amount = ?, status = ?, paid_at = ?, method = ?, note = ? WHERE id = ?'
   ).bind(paid, status, paidAt, method, note || '', id).run();
 
+  // v2.21.0 — مابه‌التفاوت به دفتر اعتبار واحد می‌رود (پیش‌پرداخت ماه‌های بعد)
+  let credited = 0;
+  let creditBalance = null;
+  if (excess > 0) {
+    credited = await registerCredit(c.env, debt.unit_id, excess, {
+      period: debt.period || '',
+      note: 'اضافه‌پرداخت هنگام ثبت پرداخت' + (b.note ? ' — ' + String(b.note).slice(0, 120) : ''),
+      createdBy: c.user.id
+    });
+    creditBalance = await unitCredit(c.env, debt.unit_id);
+  }
+
   const updated = await c.env.DB.prepare(
     'SELECT d.*, u.number AS unit_number, u.resident_name FROM debts d JOIN units u ON u.id = d.unit_id WHERE d.id = ?'
   ).bind(id).first();
-  return json({ debt: updated });
+  return json({ debt: updated, applied, credited, credit_balance: creditBalance });
 }, 'manager');
 
 route('POST', '/debts/:id/unpay', async (c) => {
@@ -711,19 +764,28 @@ route('GET', '/export', async (c) => {
   };
 
   if (type === 'debtors') {
+    // v2.21.0 — ستون «اعتبار واحد»: مانده پس از اعتبار هم جداگانه می‌آید
     const { results } = await c.env.DB.prepare(`
       SELECT u.number, u.resident_name, u.phone,
              COALESCE(SUM(d.amount - d.paid_amount), 0) AS debt,
+             COALESCE(cr.credit, 0) AS credit,
              COALESCE(MAX(CASE WHEN d.paid_amount < d.amount THEN d.remind_count END), 0) AS remind_count,
              MAX(CASE WHEN d.paid_amount < d.amount THEN d.last_remind_at END) AS last_remind_at
-      FROM units u LEFT JOIN debts d ON d.unit_id = u.id
+      FROM units u
+      LEFT JOIN debts d ON d.unit_id = u.id
+      LEFT JOIN (SELECT unit_id, SUM(amount) AS credit FROM unit_credits GROUP BY unit_id) cr ON cr.unit_id = u.id
       GROUP BY u.id
       HAVING debt > 0
       ORDER BY debt DESC
     `).all();
-    const rows = [['شماره واحد', 'ساکن', 'تلفن', 'مانده بدهی (تومان)', 'تعداد یادآوری', 'آخرین یادآوری']];
+    const rows = [['شماره واحد', 'ساکن', 'تلفن', 'مانده بدهی (تومان)', 'اعتبار واحد (تومان)', 'مانده پس از اعتبار (تومان)', 'تعداد یادآوری', 'آخرین یادآوری']];
     for (const r of results || []) {
-      rows.push([r.number, r.resident_name || '', r.phone || '', r.debt, r.remind_count || 0, jalaliDate(r.last_remind_at)]);
+      const credit = Math.max(0, Number(r.credit) || 0);
+      rows.push([
+        r.number, r.resident_name || '', r.phone || '', r.debt, credit,
+        Math.max(0, Number(r.debt) - credit),
+        r.remind_count || 0, jalaliDate(r.last_remind_at)
+      ]);
     }
     return fmt === 'xls' ? xlsResponse('debtors.xls', rows) : csvResponse('debtors.csv', rows);
   }
@@ -763,6 +825,8 @@ route('GET', '/export', async (c) => {
     const claims = await c.env.DB.prepare('SELECT * FROM payment_claims ORDER BY id').all();
     const claimFiles = await c.env.DB.prepare('SELECT * FROM claim_files ORDER BY id').all();
     const claimChunks = await c.env.DB.prepare('SELECT id, file_id, idx, data FROM claim_file_chunks ORDER BY file_id, idx').all();
+    // v2.21.0: دفتر اعتبار اضافه‌پرداخت — در پشتیبان می‌آید
+    const credits = await c.env.DB.prepare('SELECT * FROM unit_credits ORDER BY id').all();
     const payload = {
       app: 'building-charges', version: String(APP_VERSION),
       exported_at: new Date().toISOString(),
@@ -772,6 +836,7 @@ route('GET', '/export', async (c) => {
       task_file_chunks: (taskChunks.results || []).map(r => ({ ...r, data: bytesToB64(r.data) })),
       payment_claims: claims.results, claim_files: claimFiles.results,
       claim_file_chunks: (claimChunks.results || []).map(r => ({ ...r, data: bytesToB64(r.data) })),
+      unit_credits: credits.results,
       settings: settings.results
     };
     const jsonStr = JSON.stringify(payload, null, 2);
@@ -879,10 +944,13 @@ route('POST', '/import', async (c) => {
   const claims = Array.isArray(b.payment_claims) ? b.payment_claims : [];
   const claimFiles = Array.isArray(b.claim_files) ? b.claim_files : [];
   const claimChunks = Array.isArray(b.claim_file_chunks) ? b.claim_file_chunks : [];
+  // v2.21.0: دفتر اعتبار اضافه‌پرداخت — پشتیبان‌های قدیمی ندارند (اختیاری)
+  const credits = Array.isArray(b.unit_credits) ? b.unit_credits : [];
   const LIMIT = 20000;
   if (units.length > LIMIT || debts.length > LIMIT || expenses.length > LIMIT || users.length > LIMIT
     || tasks.length > LIMIT || taskFiles.length > LIMIT || taskChunks.length > LIMIT
-    || claims.length > LIMIT || claimFiles.length > LIMIT || claimChunks.length > LIMIT) {
+    || claims.length > LIMIT || claimFiles.length > LIMIT || claimChunks.length > LIMIT
+    || credits.length > LIMIT) {
     return fail('حجم فایل پشتیبان بیش از حد مجاز است');
   }
 
@@ -905,6 +973,8 @@ route('POST', '/import', async (c) => {
   stmts.push(c.env.DB.prepare('DELETE FROM claim_file_chunks'));
   stmts.push(c.env.DB.prepare('DELETE FROM claim_files'));
   stmts.push(c.env.DB.prepare('DELETE FROM payment_claims'));
+  // v2.21.0: دفتر اعتبار اضافه‌پرداخت هم پاک و بازگردانی می‌شود
+  stmts.push(c.env.DB.prepare('DELETE FROM unit_credits'));
   // v2.17.0: لینک‌های دعوتِ یک‌بارمصرفِ قبلی با بازیابی پشتیبان بی‌معنا می‌شوند
   stmts.push(c.env.DB.prepare('DELETE FROM invite_tokens'));
   stmts.push(c.env.DB.prepare("DELETE FROM users WHERE role != 'admin'"));
@@ -1065,6 +1135,20 @@ route('POST', '/import', async (c) => {
       .bind(ch.id, ch.file_id, ch.idx, ch.data));
   }
 
+  // v2.21.0: دفتر اعتبار اضافه‌پرداخت — فقط ردیف‌های سالم (واحد باید موجود باشد)
+  multiInsert('unit_credits', ['id', 'unit_id', 'amount', 'kind', 'debt_id', 'period', 'note', 'created_by', 'created_at'],
+    credits.map(x => ({
+      id: Number(x.id) || 0,
+      unit_id: Number(x.unit_id) || 0,
+      amount: Math.round(Number(x.amount) || 0),
+      kind: x.kind === 'consume' ? 'consume' : 'add',
+      debt_id: x.debt_id ? Number(x.debt_id) : null,
+      period: String(x.period ?? '').slice(0, 10),
+      note: String(x.note ?? '').slice(0, 300),
+      created_by: x.created_by ? Number(x.created_by) : null,
+      created_at: Number(x.created_at) || nowSec
+    })).filter(x => x.id && x.unit_id && x.amount !== 0));
+
   // 3) settings — everything except secrets (session_secret, bot_token)
   const skipKeys = new Set(['session_secret', 'bot_token']);
   for (const s of settings) {
@@ -1074,7 +1158,7 @@ route('POST', '/import', async (c) => {
   }
 
   // 4) reset AUTOINCREMENT counters so future inserts never collide
-  for (const [table, rows] of [['units', units], ['users', userRows], ['expenses', expenses], ['debts', debts], ['polls', polls], ['poll_votes', pollVotes], ['tasks', tasks], ['task_files', taskFiles], ['task_file_chunks', chunkRows], ['payment_claims', claims], ['claim_files', claimFiles], ['claim_file_chunks', claimChunkRows]]) {
+  for (const [table, rows] of [['units', units], ['users', userRows], ['expenses', expenses], ['debts', debts], ['polls', polls], ['poll_votes', pollVotes], ['tasks', tasks], ['task_files', taskFiles], ['task_file_chunks', chunkRows], ['payment_claims', claims], ['claim_files', claimFiles], ['claim_file_chunks', claimChunkRows], ['unit_credits', credits]]) {
     const maxId = Math.max(0, ...rows.map(r => Number(r && r.id) || 0));
     stmts.push(c.env.DB.prepare("DELETE FROM sqlite_sequence WHERE name = ?").bind(table));
     if (maxId > 0) {
@@ -1093,6 +1177,7 @@ route('POST', '/import', async (c) => {
       units: units.length, expenses: expenses.length, debts: debts.length,
       users: importedUsers, polls: polls.length, poll_votes: pollVotes.length,
       tasks: tasks.length, task_files: taskFiles.length,
+      unit_credits: credits.length,
       exported_at: b.exported_at || null
     }
   });

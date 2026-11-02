@@ -65,10 +65,14 @@ route('GET', '/dashboard', async (c) => {
     LIMIT 5
   `).all();
 
+  // v2.21.0 — جمع اعتبار اضافه‌پرداخت واحدها (پیش‌پرداخت ماه‌های بعد)
+  const creditRow = await c.env.DB.prepare('SELECT COALESCE(SUM(amount), 0) AS v FROM unit_credits').first();
+
   return json({
     period,
     totals: { issued: totals.issued, collected: totals.collected, outstanding: Math.max(0, totals.issued - totals.collected) },
     month: { issued: month.issued, collected: month.collected },
+    credit_total: Math.max(0, Number(creditRow && creditRow.v) || 0),
     units_count: unitsCount.c,
     debtors_count: debtors.c,
     series: series.results || [],
@@ -87,17 +91,28 @@ route('GET', '/reports/year', async (c) => {
   `).bind(jy + '-%').all();
 
   // v2.14.0 — «تعداد یادآوری»: how many reminders each unit's unpaid items got
+  // v2.21.0 — ستون «اعتبار»: ماندهٔ اضافه‌پرداخت هر واحد (جاری، مستقل از سال)
   const byUnit = await c.env.DB.prepare(`
     SELECT u.id, u.number, u.resident_name, u.area_m2,
            COALESCE(SUM(d.amount), 0) AS issued, COALESCE(SUM(d.paid_amount), 0) AS paid,
            COALESCE(MAX(CASE WHEN d.paid_amount < d.amount THEN d.remind_count END), 0) AS remind_count,
-           MAX(CASE WHEN d.paid_amount < d.amount THEN d.last_remind_at END) AS last_remind_at
-    FROM units u LEFT JOIN debts d ON d.unit_id = u.id AND d.period LIKE ?
+           MAX(CASE WHEN d.paid_amount < d.amount THEN d.last_remind_at END) AS last_remind_at,
+           COALESCE(cr.credit, 0) AS credit
+    FROM units u
+    LEFT JOIN debts d ON d.unit_id = u.id AND d.period LIKE ?
+    LEFT JOIN (SELECT unit_id, SUM(amount) AS credit FROM unit_credits GROUP BY unit_id) cr ON cr.unit_id = u.id
     GROUP BY u.id
     ORDER BY (COALESCE(SUM(d.amount), 0) - COALESCE(SUM(d.paid_amount), 0)) DESC
   `).bind(jy + '-%').all();
 
-  return json({ jy, series: series.results || [], by_unit: byUnit.results || [] });
+  const creditTotalRow = await c.env.DB.prepare('SELECT COALESCE(SUM(amount), 0) AS v FROM unit_credits').first();
+
+  return json({
+    jy,
+    series: series.results || [],
+    by_unit: byUnit.results || [],
+    credit_total: Math.max(0, Number(creditTotalRow && creditTotalRow.v) || 0)
+  });
 }, 'manager');
 
 // Yearly building report PDF (shared)
@@ -110,8 +125,11 @@ route('GET', '/pdf/report', async (c) => {
   `).bind(jy + '-%').all();
   const byUnitRes = await c.env.DB.prepare(`
     SELECT u.id, u.number, u.resident_name,
-           COALESCE(SUM(d.amount), 0) AS issued, COALESCE(SUM(d.paid_amount), 0) AS paid
-    FROM units u LEFT JOIN debts d ON d.unit_id = u.id AND d.period LIKE ?
+           COALESCE(SUM(d.amount), 0) AS issued, COALESCE(SUM(d.paid_amount), 0) AS paid,
+           COALESCE(cr.credit, 0) AS credit
+    FROM units u
+    LEFT JOIN debts d ON d.unit_id = u.id AND d.period LIKE ?
+    LEFT JOIN (SELECT unit_id, SUM(amount) AS credit FROM unit_credits GROUP BY unit_id) cr ON cr.unit_id = u.id
     GROUP BY u.id
     ORDER BY LENGTH(u.number), u.number
   `).bind(jy + '-%').all();
@@ -146,11 +164,16 @@ async function monthlyReportData(env, period) {
     ORDER BY LENGTH(u.number), u.number, d.id
   `).bind(period).all();
   const units = await getAllUnits(env);
+  // v2.21.0 — ماندهٔ اعتبار اضافه‌پرداخت هر واحد (جاری؛ در جدول ماهانه هم می‌آید)
+  const { results: creditRows } = await env.DB.prepare(
+    'SELECT unit_id, SUM(amount) AS credit FROM unit_credits GROUP BY unit_id'
+  ).all();
+  const creditMap = new Map((creditRows || []).map(r => [r.unit_id, Math.max(0, Number(r.credit) || 0)]));
   const map = new Map();
   for (const u of units || []) {
     map.set(u.id, {
       id: u.id, number: u.number, resident_name: u.resident_name,
-      items: 0, issued: 0, paid: 0, notes: []
+      items: 0, issued: 0, paid: 0, credit: creditMap.get(u.id) || 0, notes: []
     });
   }
   let issued = 0, collected = 0;
@@ -165,9 +188,10 @@ async function monthlyReportData(env, period) {
     const n = String(d.note || '').trim();
     if (n) r.notes.push({ description: d.description || '', note: n });
   }
+  const creditTotal = [...map.values()].reduce((s, r) => s + (r.credit || 0), 0);
   return {
     period,
-    totals: { issued, collected, remaining: Math.max(0, issued - collected) },
+    totals: { issued, collected, remaining: Math.max(0, issued - collected), credit_total: creditTotal },
     by_unit: [...map.values()]
   };
 }

@@ -18,7 +18,8 @@
 // گزارهٔ D1 محدودیت طول دارد؛ بدون سرویس خارجی.
 import { route } from './router.js';
 import { json, fail, now, getSettings } from './helpers.js';
-import { faNum, tehranParts, toJalaaliFromParts, J_MONTHS } from './jalali.js';
+import { faNum, tehranParts, toJalaaliFromParts, J_MONTHS, currentPeriod } from './jalali.js';
+import { registerCredit, unitCredit } from './credits.js';
 import { getBotToken, sendTelegramMessage } from './telegram.js';
 import { logOutgoingBotMessage } from './botmessages.js';
 import { rememberAppUrl } from './scheduler.js';
@@ -205,7 +206,7 @@ async function notifyManagersNewClaim(env, claim, origin) {
 }
 
 /** پیام نتیجهٔ بررسی به ساکن */
-async function notifyResidentClaimResult(env, claim, unit, kind) {
+async function notifyResidentClaimResult(env, claim, unit, kind, { credited = 0 } = {}) {
   try {
     const botToken = await getBotToken(env);
     if (!botToken) return;
@@ -220,8 +221,10 @@ async function notifyResidentClaimResult(env, claim, unit, kind) {
     let text;
     if (kind === 'confirmed') {
       const remaining = await unitRemaining(env, unit.unit_id);
+      const credit = await unitCredit(env, unit.unit_id);
       text = `${buildingName} — رسید شما تأیید شد\n\n` +
         `واحد ${unit.number} — مبلغ ثبت‌شده: ${faNum(Number(claim.confirmed_amount || 0).toLocaleString('en-US'))} تومان\n` +
+        (credited > 0 ? `اعتبار اضافه‌پرداخت شما: ${faNum(credit.toLocaleString('en-US'))} تومان (در شارژ ماه‌های بعد اعمال می‌شود)\n` : '') +
         (remaining > 0
           ? `مانده بدهی واحد شما: ${faNum(remaining.toLocaleString('en-US'))} تومان`
           : 'بدهی واحد شما تسویه شد. دستتان درد نکند!');
@@ -335,21 +338,40 @@ route('POST', '/claims/:id/confirm', async (c) => {
   const b = c.body || {};
   let amt = (b.amount == null || b.amount === '') ? remaining : Math.round(Number(b.amount) || 0);
   if (!(amt > 0)) return fail('مبلغ نامعتبر است');
-  if (amt > remaining) return fail(`مبلغ بیشتر از مانده بدهی واحد است (${faNum(remaining.toLocaleString('en-US'))} تومان)`);
+  // v2.21.0 — اضافه‌پرداخت: اگر مبلغ رسید از ماندهٔ بدهی بیشتر باشد (ساکن واقعاً
+  // بیشتر پرداخت کرده)، مدیر باید صریحاً تأیید کند تا مابه‌التفاوت به‌عنوان اعتبار
+  // اضافه‌پرداخت واحد ثبت شود (کد 'overpay_possible' برای مودال تأیید).
+  if (amt > remaining && !b.overpay) {
+    return fail(`مبلغ بیشتر از مانده بدهی واحد است (${faNum(remaining.toLocaleString('en-US'))} تومان) — مابه‌التفاوت به‌عنوان اعتبار اضافه‌پرداخت ثبت شود؟`, 400, 'overpay_possible');
+  }
+  const appliedTotal = Math.min(amt, remaining);
+  const excess = amt - appliedTotal;
 
   const note = `رسید پرداخت ساکن #${id}${claim.note ? ' — ' + claim.note.slice(0, 120) : ''}`;
-  const { applied } = await applyFifoPayment(c.env, unit.id, amt, 'رسید تأییدشده', note);
+  const { applied } = await applyFifoPayment(c.env, unit.id, appliedTotal, 'رسید تأییدشده', note);
+
+  // v2.21.0 — مابه‌التفاوت به دفتر اعتبار واحد می‌رود (ساکن در «واحد من» می‌بیند)
+  let credited = 0;
+  let creditBalance = null;
+  if (excess > 0) {
+    credited = await registerCredit(c.env, unit.id, excess, {
+      period: currentPeriod(),
+      note: 'اضافه‌پرداخت رسید #' + id,
+      createdBy: c.user.id
+    });
+    creditBalance = await unitCredit(c.env, unit.id);
+  }
 
   await c.env.DB.prepare(`
     UPDATE payment_claims
     SET status = 'confirmed', confirmed_amount = ?, confirmed_by = ?, confirmed_at = ?
     WHERE id = ?
-  `).bind(applied, c.user.id, now(), id).run();
+  `).bind(applied + credited, c.user.id, now(), id).run();
 
   const updated = await c.env.DB.prepare('SELECT * FROM payment_claims WHERE id = ?').bind(id).first();
 
   // خبر ساکن (waitUntil — پاسخ سریع می‌ماند؛ خطا هرگز تأیید را نمی‌شکند)
-  const job = notifyResidentClaimResult(c.env, updated, unit, 'confirmed');
+  const job = notifyResidentClaimResult(c.env, updated, unit, 'confirmed', { credited });
   if (c.ctx && typeof c.ctx.waitUntil === 'function') c.ctx.waitUntil(job);
   else { try { await job; } catch { /* non-fatal */ } }
 
@@ -357,6 +379,8 @@ route('POST', '/claims/:id/confirm', async (c) => {
   return json({
     claim: updated,
     applied,
+    credited,
+    credit_balance: creditBalance,
     unit_remaining: afterRemaining
   });
 }, 'manager');

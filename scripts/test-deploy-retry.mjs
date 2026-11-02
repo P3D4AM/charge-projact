@@ -82,6 +82,10 @@ const run = (env) => spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'de
 
 try {
   fs.writeFileSync(REAL_WRANGLER, FAKE);
+  // کانفیگ موقت با placeholder — وگرنه database_id معتبرِ واقعی مسیر «d1 list → wire»
+  // را هیچ‌وقت اجرا نمی‌کند و چک «db id wired» روی هر کپی دیپلوی‌شده‌ای می‌سوخت.
+  // finally در پایین realConfig را برمی‌گرداند.
+  fs.writeFileSync(CONFIG, realConfig.replace(/("database_id"\s*:\s*")[^"]*(")/, '$1REPLACE_ME_AFTER_d1_create$2'));
 
   // --- سناریو ۱: قطعی گذرا در whoami و d1 execute → خودکار رفع و دیپلوی کامل ---
   fs.rmSync(STATE, { force: true });

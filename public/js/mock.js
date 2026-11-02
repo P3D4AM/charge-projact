@@ -5,7 +5,7 @@ import { currentPeriod, periodLabel, isPeriod, addPeriods, tehranDayStartSec, to
 import { buildZip } from './lib/zip.js';
 
 const KEY = 'bc_mock_db_v6';
-const SCHEMA_V = 9; // ← با هر تغییر شکل داده‌ی دمو یک واحد اضافه شود
+const SCHEMA_V = 10; // ← با هر تغییر شکل داده‌ی دمو یک واحد اضافه شود (v10: unit_credits)
 
 function seed() {
   const period = currentPeriod();
@@ -54,6 +54,13 @@ function seed() {
   const expenses = [
     { id: 1, title: 'هزینه نظافت', category: 'نظافت', amount: 1200000, period, split_mode: 'equal', spent_at: Math.floor(Date.now() / 1000) - 432000, note: '' },
     { id: 2, title: 'قبض برق مشترک', category: 'برق', amount: 800000, period, split_mode: 'area', spent_at: Math.floor(Date.now() / 1000) - 172800, note: '' }
+  ];
+  // v2.21.0 — دفتر اعتبار اضافه‌پرداخت (دمو): واحد ۵ ماه قبل ۸۰۰هزار اضافه پرداخت کرده،
+  // ۶۵۰هزارش در صدور شارژ این ماه خودکار مصرف شده و ۱۵۰هزار اعتبار مانده؛ واحد ۳ هم ۱۲۰هزار اعتبار دارد
+  const unit_credits = [
+    { id: 1, unit_id: 5, amount: 800000, kind: 'add', debt_id: null, period: prev, note: 'اضافه‌پرداخت واریزی — بیشتر از شارژ پرداخت کرد', created_by: 2, created_at: Math.floor(Date.now() / 1000) - 2600000 },
+    { id: 2, unit_id: 5, amount: -650000, kind: 'consume', debt_id: 5, period, note: 'مصرف خودکار در صدور شارژ — پیش‌پرداخت شارژ این ماه', created_at: Math.floor(Date.now() / 1000) - 2500000 },
+    { id: 3, unit_id: 3, amount: 120000, kind: 'add', debt_id: null, period: prev, note: 'ثبت دستی اضافه‌پرداخت', created_by: 2, created_at: Math.floor(Date.now() / 1000) - 2400000 }
   ];
   // v2.13.0 — دفتر کارهای مدیر (دمو): چند کار نمونه با هزینه
   const periodTs = (p, day) => {
@@ -109,7 +116,7 @@ function seed() {
   ];
   return {
     v: SCHEMA_V,
-    seq: { users: 5, units: 9, debts: debtId, expenses: 3, polls: 2, poll_votes: 3, visits: 6, bot_messages: 12, tasks: 5, task_files: 1, task_file_chunks: 1, claims: 3, claim_files: 3, claim_file_chunks: 3, invites: 1 },
+    seq: { users: 5, units: 9, debts: debtId, expenses: 3, polls: 2, poll_votes: 3, visits: 6, bot_messages: 12, tasks: 5, task_files: 1, task_file_chunks: 1, claims: 3, claim_files: 3, claim_file_chunks: 3, invites: 1, credits: 4 },
     building_name: 'برج نگین (دمو)',
     settings: {
       address: 'اصفهان، خیابان سعادت‌آباد، پلاک ۱۲',
@@ -163,6 +170,7 @@ function seed() {
     task_files: [],
     task_file_chunks: [],
     payment_claims: claims, claim_files, claim_file_chunks,
+    unit_credits,
     invites: []
   };
 }
@@ -181,9 +189,10 @@ function load() {
         && Array.isArray(db.visits) && Array.isArray(db.bot_messages)
         && Array.isArray(db.tasks) && Array.isArray(db.task_files) && Array.isArray(db.task_file_chunks)
         && Array.isArray(db.payment_claims) && Array.isArray(db.claim_files) && Array.isArray(db.claim_file_chunks)
+        && Array.isArray(db.unit_credits || [])
         && Array.isArray(db.invites || [])
         && db.settings && typeof db.building_name === 'string';
-      if (okShape) { db.invites = db.invites || []; return db; }
+      if (okShape) { db.invites = db.invites || []; db.unit_credits = db.unit_credits || []; return db; }
     }
   } catch { /* ignore */ }
   const db = seed();
@@ -242,9 +251,11 @@ function unitSummary(db, u) {
   const acc = db.users.find(x => x.role === 'resident' && x.unit_id === u.id);
   // v2.17.0 — حساب مدیرِ متصل به واحد (یوزر/پسورد پنل اصلی پوششش می‌دهد)
   const mgr = db.users.find(x => x.role === 'manager' && x.unit_id === u.id);
+  const credit = db.unit_credits.filter(c => c.unit_id === u.id).reduce((s, c) => s + c.amount, 0);
   return {
     ...u,
     issued: t.issued, paid: t.paid, debt: t.debt,
+    credit: Math.max(0, credit),
     has_account: Boolean(acc),
     account_id: acc ? acc.id : null,
     account_username: acc ? acc.username : null,
@@ -279,6 +290,7 @@ function dashboardData(db, period) {
     });
   const top = db.units.map(u => ({ number: u.number, resident_name: u.resident_name, debt: unitDebt(db, u.id).debt }))
     .filter(x => x.debt > 0).sort((a, b) => b.debt - a.debt).slice(0, 5);
+  const creditTotal = db.unit_credits.reduce((s, c) => s + c.amount, 0);
   return {
     period,
     totals: { issued, collected, outstanding: Math.max(0, issued - collected) },
@@ -286,6 +298,7 @@ function dashboardData(db, period) {
       issued: mItems.reduce((s, d) => s + d.amount, 0),
       collected: mItems.reduce((s, d) => s + d.paid_amount, 0)
     },
+    credit_total: Math.max(0, creditTotal),
     units_count: db.units.length,
     debtors_count: debtors,
     series: Object.values(seriesMap).sort((a, b) => a.period.localeCompare(b.period)),
@@ -370,8 +383,8 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     save(db);
     return ok({ token: 'mock-token-' + u.id, linked: true, bound: true, user: pub(u) });
   }
-  if (path === '/install-status') return ok({ installed: true, version: '2.20.1' });
-  if (path === '/health') return ok({ ok: true, version: '2.20.1' });
+  if (path === '/install-status') return ok({ installed: true, version: '2.21.0' });
+  if (path === '/health') return ok({ ok: true, version: '2.21.0' });
 
   // ---------- auth guard ----------
   const guard = () => (!me ? err('ابتدا وارد شوید', 401) : null);
@@ -425,11 +438,13 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
       return {
         id: u.id, number: u.number, resident_name: u.resident_name, area_m2: u.area_m2,
         issued: t.issued, paid: t.paid,
+        credit: db.unit_credits.filter(c => c.unit_id === u.id).reduce((s, c) => s + c.amount, 0),
         remind_count: unpaid.reduce((s, d) => Math.max(s, d.remind_count || 0), 0),
         last_remind_at: unpaid.reduce((s, d) => Math.max(s, d.last_remind_at || 0), 0) || null
       };
     }).sort((a, b) => (b.issued - b.paid) - (a.issued - a.paid));
-    return ok({ jy, series: Object.values(seriesMap).sort((a, b) => a.period.localeCompare(b.period)), by_unit });
+    const creditTotal = db.unit_credits.reduce((s, c) => s + c.amount, 0);
+    return ok({ jy, series: Object.values(seriesMap).sort((a, b) => a.period.localeCompare(b.period)), by_unit, credit_total: Math.max(0, creditTotal) });
   }
   if (path === '/reports/month') {
     const g = roleGuard('manager'); if (g) return g;
@@ -442,9 +457,11 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
       issued += issuedU; collected += paidU;
       const notes = items.filter(d => String(d.note || '').trim())
         .map(d => ({ description: d.description || '', note: String(d.note).trim() }));
-      return { id: u.id, number: u.number, resident_name: u.resident_name, items: items.length, issued: issuedU, paid: paidU, notes };
+      const creditU = db.unit_credits.filter(c => c.unit_id === u.id).reduce((s, c) => s + c.amount, 0);
+      return { id: u.id, number: u.number, resident_name: u.resident_name, items: items.length, issued: issuedU, paid: paidU, credit: creditU, notes };
     });
-    return ok({ period, totals: { issued, collected, remaining: Math.max(0, issued - collected) }, by_unit });
+    const creditTotal = db.unit_credits.reduce((s, c) => s + c.amount, 0);
+    return ok({ period, totals: { issued, collected, remaining: Math.max(0, issued - collected), credit_total: Math.max(0, creditTotal) }, by_unit });
   }
   if (path === '/export') {
     const g = roleGuard('manager', 'admin'); if (g) return g; // v2.14: shared
@@ -469,12 +486,13 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     if (type === 'backup') {
       // full-fidelity JSON backup — same shape as the server (v2.11.0)
       const payload = {
-        app: 'building-charges', version: '2.20.1',
+        app: 'building-charges', version: '2.21.0',
         exported_at: new Date().toISOString(),
         units: db.units, debts: db.debts, expenses: db.expenses,
         users: db.users, polls: db.polls, poll_votes: db.poll_votes,
         tasks: db.tasks, task_files: db.task_files, task_file_chunks: db.task_file_chunks,
         payment_claims: db.payment_claims, claim_files: db.claim_files, claim_file_chunks: db.claim_file_chunks,
+        unit_credits: db.unit_credits,
         settings: Object.entries(db.settings || {}).map(([key, value]) => ({ key, value }))
       };
       const jsonStr = JSON.stringify(payload, null, 2);
@@ -515,17 +533,19 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
       return ok({ __download: { content: jsonStr, mime: 'application/json', filename: 'building-backup-' + Date.now() + '.json' } });
     }
     if (type === 'debtors') {
-      const rows = [['شماره واحد', 'ساکن', 'تلفن', 'مانده بدهی (تومان)', 'تعداد یادآوری', 'آخرین یادآوری']];
+      const rows = [['شماره واحد', 'ساکن', 'تلفن', 'مانده بدهی (تومان)', 'اعتبار واحد (تومان)', 'مانده پس از اعتبار (تومان)', 'تعداد یادآوری', 'آخرین یادآوری']];
       db.units.map(u => {
         const unpaid = db.debts.filter(d => d.unit_id === u.id && d.paid_amount < d.amount);
+        const creditU = Math.max(0, db.unit_credits.filter(c => c.unit_id === u.id).reduce((s, c) => s + c.amount, 0));
         return {
           number: u.number, resident_name: u.resident_name, phone: u.phone,
           debt: unitDebt(db, u.id).debt,
+          credit: creditU,
           rc: unpaid.reduce((s, d) => Math.max(s, d.remind_count || 0), 0),
           lr: unpaid.reduce((s, d) => Math.max(s, d.last_remind_at || 0), 0)
         };
       }).filter(u => u.debt > 0)
-        .forEach(u => rows.push([u.number, u.resident_name || '', u.phone || '', u.debt, u.rc, u.lr ? periodLabelTs(u.lr) : '-']));
+        .forEach(u => rows.push([u.number, u.resident_name || '', u.phone || '', u.debt, u.credit, Math.max(0, u.debt - u.credit), u.rc, u.lr ? periodLabelTs(u.lr) : '-']));
       return fmt === 'xls' ? xls('debtors.xls', rows)
         : ok({ __download: { content: '\uFEFF' + rows.map(r => r.join(',')).join('\n'), mime: 'text/csv', filename: 'debtors.csv' } });
     }
@@ -588,6 +608,8 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     db.task_files = Array.isArray(body.task_files) ? body.task_files.map(f => ({ ...f })) : [];
     db.task_file_chunks = Array.isArray(body.task_file_chunks) ? body.task_file_chunks.map(ch => ({ ...ch })) : [];
     db.users = [...admins, ...userRows];
+    // v2.21.0 — دفتر اعتبار اضافه‌پرداخت (پشتیبان‌های قدیمی ندارند)
+    db.unit_credits = Array.isArray(body.unit_credits) ? body.unit_credits.map(c => ({ ...c })) : [];
     for (const s of body.settings) {
       if (!s || !s.key || skipKeys.has(String(s.key))) continue;
       db.settings = db.settings || {};
@@ -604,8 +626,9 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     db.seq.tasks = maxId(db.tasks);
     db.seq.task_files = maxId(db.task_files);
     db.seq.task_file_chunks = maxId(db.task_file_chunks);
+    db.seq.credits = maxId(db.unit_credits);
     save(db);
-    return ok({ imported: { units: db.units.length, debts: db.debts.length, expenses: db.expenses.length, users: userRows.length, polls: db.polls.length, poll_votes: db.poll_votes.length, tasks: db.tasks.length, task_files: db.task_files.length, exported_at: body.exported_at || null } });
+    return ok({ imported: { units: db.units.length, debts: db.debts.length, expenses: db.expenses.length, users: userRows.length, polls: db.polls.length, poll_votes: db.poll_votes.length, tasks: db.tasks.length, task_files: db.task_files.length, unit_credits: db.unit_credits.length, exported_at: body.exported_at || null } });
   }
 
   // ---------- manager ----------
@@ -837,8 +860,34 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
         created++;
       }
     });
+    // v2.21.0 — مصرف خودکار اعتبار اضافه‌پرداخت (آینهٔ autoConsumeCredit سرور):
+    // برای هر واحدی که قلم تازه صادر شد، اعتبارش FIFO روی اقلام باز همان واحد مصرف می‌شود
+    let creditUsedTotal = 0, creditUnits = 0;
+    targets.forEach(u => {
+      const hasNew = db.debts.some(dd => dd.unit_id === u.id && dd.period === period && dd.kind === 'monthly' && dd.method === '');
+      if (!hasNew) return;
+      let balance = db.unit_credits.filter(c => c.unit_id === u.id).reduce((s, c) => s + c.amount, 0);
+      if (balance <= 0) return;
+      let usedU = 0;
+      const open = db.debts.filter(dd => dd.unit_id === u.id && dd.paid_amount < dd.amount)
+        .sort((a, b) => String(a.period).localeCompare(String(b.period)) || a.id - b.id);
+      for (const d of open) {
+        if (balance <= 0) break;
+        const rem = d.amount - d.paid_amount;
+        if (rem <= 0) continue;
+        const take = Math.min(rem, balance);
+        d.paid_amount += take;
+        d.status = d.paid_amount >= d.amount ? 'paid' : 'partial';
+        d.paid_at = Math.floor(Date.now() / 1000);
+        d.method = 'اعتبار اضافه‌پرداخت';
+        d.note = d.note ? (String(d.note).slice(0, 180) + ' | پیش‌پرداخت با اعتبار اضافه‌پرداخت') : 'پیش‌پرداخت با اعتبار اضافه‌پرداخت';
+        db.unit_credits.push({ id: db.seq.credits++, unit_id: u.id, amount: -take, kind: 'consume', debt_id: d.id, period, note: 'مصرف خودکار در صدور شارژ', created_at: Math.floor(Date.now() / 1000) });
+        balance -= take; usedU += take;
+      }
+      if (usedU > 0) { creditUsedTotal += usedU; creditUnits++; }
+    });
     save(db);
-    return ok({ created, skipped, no_area: noArea });
+    return ok({ created, skipped, no_area: noArea, credit_used_total: creditUsedTotal, credit_units: creditUnits });
   }
   if (path.endsWith('/pay') && method === 'POST') {
     const g = roleGuard('manager'); if (g) return g;
@@ -848,15 +897,24 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     const remaining = d.amount - d.paid_amount;
     const amt = body.amount == null ? remaining : num(body.amount);
     if (!(amt > 0)) return err('مبلغ نامعتبر است');
-    if (amt > remaining) return err('مبلغ بیشتر از مانده بدهی است');
-    d.paid_amount += amt;
+    // v2.21.0 — اضافه‌پرداخت: بدون تأیید صریح (overpay) رد می‌شود (آینهٔ سرور)
+    if (amt > remaining && !body.overpay) return err('مبلغ بیشتر از مانده بدهی است؛ مابه‌التفاوت به‌عنوان اعتبار اضافه‌پرداخت ثبت شود؟', 400, 'overpay_possible');
+    const applied = Math.min(amt, remaining);
+    const excess = amt - applied;
+    d.paid_amount += applied;
     d.status = d.paid_amount >= d.amount ? 'paid' : 'partial';
     d.paid_at = body.date ? num(body.date) : Math.floor(Date.now() / 1000);
     d.method = String(body.method || '');
     if (body.note) d.note = String(body.note).slice(0, 200);
+    let credited = 0, creditBalance = null;
+    if (excess > 0) {
+      credited = excess;
+      db.unit_credits.push({ id: db.seq.credits++, unit_id: d.unit_id, amount: excess, kind: 'add', debt_id: null, period: d.period, note: 'اضافه‌پرداخت هنگام ثبت پرداخت' + (body.note ? ' — ' + String(body.note).slice(0, 120) : ''), created_by: me.id, created_at: Math.floor(Date.now() / 1000) });
+      creditBalance = db.unit_credits.filter(c => c.unit_id === d.unit_id).reduce((s, c) => s + c.amount, 0);
+    }
     save(db);
     const u = db.units.find(x => x.id === d.unit_id);
-    return ok({ debt: { ...d, unit_number: u ? u.number : '', resident_name: u ? u.resident_name : '' } });
+    return ok({ debt: { ...d, unit_number: u ? u.number : '', resident_name: u ? u.resident_name : '' }, applied, credited, credit_balance: creditBalance });
   }
   if (path.endsWith('/unpay') && method === 'POST') {
     const g = roleGuard('manager'); if (g) return g;
@@ -1092,6 +1150,72 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     return ok({ __file: { name: f.name, mime: f.mime, data_b64: data } });
   }
 
+  // ---------- v2.21.0 — اعتبار اضافه‌پرداخت (آینهٔ src/credits.js) ----------
+  // function declaration — hoisted؛ /my/summary که بالاتر در همین تابع است هم استفاده می‌کند
+  function unitCreditOf(uid) { return Math.max(0, db.unit_credits.filter(c => c.unit_id === uid).reduce((s, c) => s + c.amount, 0)); }
+  function creditEntry(e) {
+    const u = db.units.find(x => x.id === e.unit_id);
+    return { ...e, unit_number: u ? u.number : '', resident_name: u ? u.resident_name : '' };
+  }
+  if (path === '/credits' && method === 'GET') {
+    const g = roleGuard('manager'); if (g) return g;
+    const uid = Number(q.get('unit_id') || 0);
+    const balances = db.units.map(u => ({ unit_id: u.id, unit_number: u.number, resident_name: u.resident_name, credit: unitCreditOf(u.id) }))
+      .filter(b => b.credit !== 0);
+    const entries = uid ? db.unit_credits.filter(c => c.unit_id === uid) : db.unit_credits;
+    return ok({ balances, entries: entries.slice().sort((a, b) => b.id - a.id).slice(0, 200).map(creditEntry), total: balances.reduce((s, b) => s + b.credit, 0) });
+  }
+  if (path === '/credits' && method === 'POST') {
+    const g = roleGuard('manager'); if (g) return g;
+    const uid = num(body.unit_id);
+    const amount = Math.round(num(body.amount) || 0);
+    if (!uid) return err('واحد مشخص نشده است');
+    if (!(amount > 0)) return err('مبلغ اضافه‌پرداخت باید بزرگ‌تر از صفر باشد');
+    const unit = db.units.find(u => u.id === uid);
+    if (!unit) return err('واحد پیدا نشد', 404);
+    db.unit_credits.push({ id: db.seq.credits++, unit_id: uid, amount, kind: 'add', debt_id: null, period: String(body.period || '').slice(0, 10), note: String(body.note || 'ثبت دستی اضافه‌پرداخت').slice(0, 300), created_by: me.id, created_at: Math.floor(Date.now() / 1000) });
+    save(db);
+    return ok({ ok: true, unit_id: uid, registered: amount, credit_balance: unitCreditOf(uid) }, 201);
+  }
+  if (/^\/credits\/\d+$/.test(path) && method === 'DELETE') {
+    const g = roleGuard('manager'); if (g) return g;
+    const id = Number(path.split('/')[2]);
+    const row = db.unit_credits.find(x => x.id === id);
+    if (!row) return err('ردیف اعتبار پیدا نشد', 404);
+    if (row.kind !== 'add') return err('ردیف‌های «مصرف اعتبار» قابل حذف نیستند — بدهی قلم مربوطه را لغو/اصلاح کنید', 409, 'consume_locked');
+    const balance = unitCreditOf(row.unit_id);
+    if (balance - row.amount < 0) return err('این اضافه‌پرداخت قبلاً مصرف شده است و قابل حذف نیست؛ ابتدا مصرف آن را از قلم مربوطه لغو کنید', 409, 'already_consumed');
+    db.unit_credits = db.unit_credits.filter(x => x.id !== id);
+    save(db);
+    return ok({ ok: true, credit_balance: balance - row.amount });
+  }
+  if (path === '/credits/apply' && method === 'POST') {
+    const g = roleGuard('manager'); if (g) return g;
+    const debtId = num(body.debt_id);
+    const d = db.debts.find(x => x.id === debtId);
+    if (!d) return err('قلم بدهی پیدا نشد', 404);
+    if (d.paid_amount >= d.amount) return err('این قلم قبلاً تسویه شده است', 409, 'already_paid');
+    const balance = unitCreditOf(d.unit_id);
+    if (balance <= 0) return err('این واحد اعتبار قابل مصرف ندارد', 409, 'no_credit');
+    const used = Math.min(balance, d.amount - d.paid_amount);
+    d.paid_amount += used;
+    d.status = d.paid_amount >= d.amount ? 'paid' : 'partial';
+    d.paid_at = d.paid_at || Math.floor(Date.now() / 1000);
+    d.method = 'اعتبار اضافه‌پرداخت';
+    d.note = d.note ? (String(d.note).slice(0, 180) + ' | اعمال دستی اعتبار توسط مدیر') : 'اعمال دستی اعتبار توسط مدیر';
+    db.unit_credits.push({ id: db.seq.credits++, unit_id: d.unit_id, amount: -used, kind: 'consume', debt_id: d.id, period: d.period, note: 'اعمال دستی اعتبار توسط مدیر', created_at: Math.floor(Date.now() / 1000) });
+    save(db);
+    const u = db.units.find(x => x.id === d.unit_id);
+    const after = Math.max(0, db.debts.filter(x => x.unit_id === d.unit_id).reduce((s, x) => s + (x.amount - x.paid_amount), 0));
+    return ok({ ok: true, used, debt: { ...d, unit_number: u ? u.number : '', resident_name: u ? u.resident_name : '' }, credit_balance: unitCreditOf(d.unit_id), unit_remaining: after });
+  }
+  if (path === '/my/credit' && method === 'GET') {
+    const g = roleGuard('resident', 'manager'); if (g) return g;
+    const unit = db.units.find(u => u.id === me.unit_id);
+    if (!unit) return err('به هیچ واحدی متصل نیستید', 403, 'no_unit');
+    return ok({ unit_id: unit.id, balance: unitCreditOf(unit.id), entries: db.unit_credits.filter(c => c.unit_id === unit.id).sort((a, b) => b.id - a.id).slice(0, 50).map(creditEntry) });
+  }
+
   // ---------- v2.16.0 — رسیده‌های پرداخت شارژ (آینهٔ src/claims.js) ----------
   // ترتیب مهم است: مسیر فایل‌ها قبل از مسیرهای id-محور
   if (path.startsWith('/claims/files/') && method === 'GET') {
@@ -1172,9 +1296,12 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     if (remaining <= 0) return err('بدهی این واحد تسویه شده است؛ رسید را رد کنید یا ابتدا بدهی را اصلاح کنید', 409, 'no_debt');
     let amt = (body.amount == null || body.amount === '') ? remaining : num(body.amount);
     if (!(amt > 0)) return err('مبلغ نامعتبر است');
-    if (amt > remaining) return err('مبلغ بیشتر از مانده بدهی واحد است (' + remaining.toLocaleString('en-US') + ' تومان)');
+    // v2.21.0 — اضافه‌پرداخت: بدون تأیید صریح رد می‌شود (آینهٔ سرور)
+    if (amt > remaining && !body.overpay) return err('مبلغ بیشتر از مانده بدهی واحد است (' + remaining.toLocaleString('en-US') + ' تومان) — مابه‌التفاوت به‌عنوان اعتبار اضافه‌پرداخت ثبت شود؟', 400, 'overpay_possible');
+    const appliedTotal = Math.min(amt, remaining);
+    const excess = amt - appliedTotal;
     // FIFO — قدیمی‌ترین دوره اول (آینهٔ applyFifoPayment سرور)
-    let left = amt;
+    let left = appliedTotal;
     for (const d of unitDebts.slice().sort((a, b) => String(a.period).localeCompare(String(b.period)) || a.id - b.id)) {
       if (left <= 0) break;
       const rem = d.amount - d.paid_amount;
@@ -1188,14 +1315,20 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
       d.note = d.note ? (String(d.note).slice(0, 180) + ' | ' + noteAdd) : noteAdd;
       left -= take;
     }
-    const applied = amt - left;
+    const applied = appliedTotal - left;
+    let credited = 0, creditBalance = null;
+    if (excess > 0) {
+      credited = excess;
+      db.unit_credits.push({ id: db.seq.credits++, unit_id: unit.id, amount: excess, kind: 'add', debt_id: null, period: currentPeriod(), note: 'اضافه‌پرداخت رسید #' + claim.id, created_by: me.id, created_at: Math.floor(Date.now() / 1000) });
+      creditBalance = db.unit_credits.filter(c => c.unit_id === unit.id).reduce((s, c) => s + c.amount, 0);
+    }
     claim.status = 'confirmed';
-    claim.confirmed_amount = applied;
+    claim.confirmed_amount = applied + credited;
     claim.confirmed_by = me.id;
     claim.confirmed_at = Math.floor(Date.now() / 1000);
     save(db);
     const after = Math.max(0, db.debts.filter(d => d.unit_id === unit.id).reduce((s, d) => s + (d.amount - d.paid_amount), 0));
-    return ok({ claim, applied, unit_remaining: after });
+    return ok({ claim, applied, credited, credit_balance: creditBalance, unit_remaining: after });
   }
   if (/^\/claims\/\d+\/reject$/.test(path) && method === 'POST') {
     const g = roleGuard('manager'); if (g) return g;
@@ -1530,9 +1663,17 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
       .sort((a, b) => b.period.localeCompare(a.period));
     const issued = debts.reduce((s, d) => s + d.amount, 0);
     const paid = debts.reduce((s, d) => s + d.paid_amount, 0);
+    // v2.21.0 — اعتبار اضافه‌پرداخت واحد (مانده + ماندهٔ مؤثر + تاریخچه)
+    const cEntries = db.unit_credits.filter(c => c.unit_id === unit.id).sort((a, b) => b.id - a.id).slice(0, 20);
+    const balance = Math.max(0, db.unit_credits.filter(c => c.unit_id === unit.id).reduce((s, c) => s + c.amount, 0));
     return ok({
       unit: { id: unit.id, number: unit.number, resident_name: unit.resident_name, area_m2: unit.area_m2, residents_count: unit.residents_count },
-      debts, totals: { issued, paid, remaining: Math.max(0, issued - paid) }
+      debts, totals: { issued, paid, remaining: Math.max(0, issued - paid) },
+      credit: {
+        balance,
+        effective_remaining: Math.max(0, (issued - paid) - balance),
+        entries: cEntries.map(creditEntry)
+      }
     });
   }
   if (path === '/my/unit' && method === 'POST') {
@@ -1625,7 +1766,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     };
     return ok({
       installed: true, building_name: db.building_name,
-      app_url: location.origin, version: '2.20.1', counts,
+      app_url: location.origin, version: '2.21.0', counts,
       visits: mockVisitStats(),
       bot: { configured: Boolean(db.bot), connected: Boolean(db.bot && db.bot.connected), username: db.bot ? db.bot.username : null },
       installed_at: Math.floor(Date.now() / 1000)
