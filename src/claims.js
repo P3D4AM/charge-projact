@@ -20,6 +20,7 @@ import { route } from './router.js';
 import { json, fail, now, getSettings } from './helpers.js';
 import { faNum, tehranParts, toJalaaliFromParts, J_MONTHS, currentPeriod } from './jalali.js';
 import { registerCredit, unitCredit } from './credits.js';
+import { notifyActivity } from './actnotifs.js';
 import { getBotToken, sendTelegramMessage } from './telegram.js';
 import { logOutgoingBotMessage } from './botmessages.js';
 import { rememberAppUrl } from './scheduler.js';
@@ -139,6 +140,13 @@ route('POST', '/claims', async (c) => {
     VALUES (?, ?, ?, ?, 'pending', ?)
   `).bind(unit.id, c.user.id, amount, note, nowSec).run();
   const claimId = res.meta.last_row_id;
+  notifyActivity(c.env, c.ctx, 'claim_created', {
+    actor: c.user, unitId: unit.id, unitNumber: unit.number, refId: claimId,
+    lines: [
+      `واحد ${unit.number} — مبلغ اعلام‌شده: ${amount.toLocaleString('en-US')} تومان`,
+      note ? `توضیح ساکن: ${note}` : 'فیش واریزی پیوست شد'
+    ]
+  });
 
   const fName = String(f.name || 'fish-varizi').trim().slice(0, 120) || 'fish-varizi';
   const fRes = await c.env.DB.prepare(`
@@ -376,6 +384,13 @@ route('POST', '/claims/:id/confirm', async (c) => {
   else { try { await job; } catch { /* non-fatal */ } }
 
   const afterRemaining = await unitRemaining(c.env, unit.id);
+  notifyActivity(c.env, c.ctx, 'claim_created', {
+    actor: c.user, unitId: unit.id, unitNumber: unit.number, refId: id,
+    lines: [
+      `رسید #${id} واحد ${unit.number} توسط مدیر تأیید شد`,
+      `مبلغ تأییدشده: ${(applied + credited).toLocaleString('en-US')} تومان (اعمال روی بدهی: ${applied.toLocaleString('en-US')}، اعتبار: ${credited.toLocaleString('en-US')})`
+    ]
+  });
   return json({
     claim: updated,
     applied,

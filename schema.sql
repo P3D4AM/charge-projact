@@ -240,3 +240,25 @@ CREATE TABLE IF NOT EXISTS unit_credits (
 );
 
 CREATE INDEX IF NOT EXISTS idx_credits_unit ON unit_credits(unit_id);
+
+-- v12 (v2.22.0): گزارش کامل اعلان‌های فعالیت مدیرکل — هر رویداد تیک‌خوردهٔ پنل
+-- ادمین یک ردیف می‌سازد (متن کامل پیام + انجام‌دهنده + وضعیت ارسال تلگرام).
+CREATE TABLE IF NOT EXISTS admin_notifications (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  event            TEXT NOT NULL,
+  title            TEXT NOT NULL DEFAULT '',
+  text             TEXT NOT NULL,
+  actor_user_id    INTEGER,
+  actor_username   TEXT DEFAULT '',
+  actor_role       TEXT DEFAULT '',
+  unit_id          INTEGER,
+  unit_number      TEXT DEFAULT '',
+  ref_id           INTEGER,
+  meta             TEXT DEFAULT '',
+  sent             INTEGER NOT NULL DEFAULT 0,
+  send_error       TEXT DEFAULT '',
+  created_at       INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_notif_event ON admin_notifications(event);
+CREATE INDEX IF NOT EXISTS idx_admin_notif_time  ON admin_notifications(created_at);

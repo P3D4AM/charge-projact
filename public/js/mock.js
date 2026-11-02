@@ -5,7 +5,7 @@ import { currentPeriod, periodLabel, isPeriod, addPeriods, tehranDayStartSec, to
 import { buildZip } from './lib/zip.js';
 
 const KEY = 'bc_mock_db_v6';
-const SCHEMA_V = 10; // ← با هر تغییر شکل داده‌ی دمو یک واحد اضافه شود (v10: unit_credits)
+const SCHEMA_V = 11; // ← با هر تغییر شکل داده‌ی دمو یک واحد اضافه شود (v11: admin_notifications)
 
 function seed() {
   const period = currentPeriod();
@@ -116,7 +116,7 @@ function seed() {
   ];
   return {
     v: SCHEMA_V,
-    seq: { users: 5, units: 9, debts: debtId, expenses: 3, polls: 2, poll_votes: 3, visits: 6, bot_messages: 12, tasks: 5, task_files: 1, task_file_chunks: 1, claims: 3, claim_files: 3, claim_file_chunks: 3, invites: 1, credits: 4 },
+    seq: { users: 5, units: 9, debts: debtId, expenses: 3, polls: 2, poll_votes: 3, visits: 6, bot_messages: 12, tasks: 5, task_files: 1, task_file_chunks: 1, claims: 3, claim_files: 3, claim_file_chunks: 3, invites: 1, credits: 4, admin_notifications: 3 },
     building_name: 'برج نگین (دمو)',
     settings: {
       address: 'اصفهان، خیابان سعادت‌آباد، پلاک ۱۲',
@@ -171,6 +171,12 @@ function seed() {
     task_file_chunks: [],
     payment_claims: claims, claim_files, claim_file_chunks,
     unit_credits,
+    // v2.22.0 — گزارش اعلان‌های فعالیت مدیرکل (دمو): چند ردیف نمونه
+    admin_notifications: [
+      { id: 1, event: 'resident_login', title: 'ساکن وارد اپ شد (نام کاربری/تلگرام)', text: '🔔 ساختمان نمونه\nساکن وارد اپ شد (نام کاربری/تلگرام)\n\n• روش ورود: داخل تلگرام\n\nانجام‌دهنده: رضا محمدی (@reza_m) — ساکن', actor_user_id: 3, actor_username: 'unit5', actor_role: 'resident', unit_id: 5, unit_number: '5', ref_id: null, meta: '', sent: 1, send_error: '', created_at: Math.floor(Date.now() / 1000) - 5400 },
+      { id: 2, event: 'payment', title: 'ثبت/ویرایش/لغو پرداخت و اعتبار اضافه‌پرداخت', text: '🔔 ساختمان نمونه\nثبت/ویرایش/لغو پرداخت و اعتبار اضافه‌پرداخت\n\n• اعتبار (اضافه‌پرداخت) ۱۲۰٬۰۰۰ تومانی برای واحد ۳ ثبت شد — مانده اعتبار: ۱۲۰٬۰۰۰\n\nانجام‌دهنده: حسین محمدی — مدیر ساختمان', actor_user_id: 2, actor_username: 'manager', actor_role: 'manager', unit_id: 3, unit_number: '3', ref_id: null, meta: '', sent: 1, send_error: '', created_at: Math.floor(Date.now() / 1000) - 3600 },
+      { id: 3, event: 'export_import', title: 'خروجی/بکاپ/بازیابی داده', text: '🔔 ساختمان نمونه\nخروجی/بکاپ/بازیابی داده\n\n• خروجی بدهکاران (فرمت: xls) دریافت شد\n\nانجام‌دهنده: حسین محمدی — مدیر ساختمان', actor_user_id: 2, actor_username: 'manager', actor_role: 'manager', unit_id: null, unit_number: '', ref_id: null, meta: '', sent: 0, send_error: 'no_admin_telegram', created_at: Math.floor(Date.now() / 1000) - 1800 }
+    ],
     invites: []
   };
 }
@@ -190,9 +196,10 @@ function load() {
         && Array.isArray(db.tasks) && Array.isArray(db.task_files) && Array.isArray(db.task_file_chunks)
         && Array.isArray(db.payment_claims) && Array.isArray(db.claim_files) && Array.isArray(db.claim_file_chunks)
         && Array.isArray(db.unit_credits || [])
+        && Array.isArray(db.admin_notifications || [])
         && Array.isArray(db.invites || [])
         && db.settings && typeof db.building_name === 'string';
-      if (okShape) { db.invites = db.invites || []; db.unit_credits = db.unit_credits || []; return db; }
+      if (okShape) { db.invites = db.invites || []; db.unit_credits = db.unit_credits || []; db.admin_notifications = db.admin_notifications || []; return db; }
     }
   } catch { /* ignore */ }
   const db = seed();
@@ -383,8 +390,8 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     save(db);
     return ok({ token: 'mock-token-' + u.id, linked: true, bound: true, user: pub(u) });
   }
-  if (path === '/install-status') return ok({ installed: true, version: '2.21.0' });
-  if (path === '/health') return ok({ ok: true, version: '2.21.0' });
+  if (path === '/install-status') return ok({ installed: true, version: '2.22.0' });
+  if (path === '/health') return ok({ ok: true, version: '2.22.0' });
 
   // ---------- auth guard ----------
   const guard = () => (!me ? err('ابتدا وارد شوید', 401) : null);
@@ -486,7 +493,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     if (type === 'backup') {
       // full-fidelity JSON backup — same shape as the server (v2.11.0)
       const payload = {
-        app: 'building-charges', version: '2.21.0',
+        app: 'building-charges', version: '2.22.0',
         exported_at: new Date().toISOString(),
         units: db.units, debts: db.debts, expenses: db.expenses,
         users: db.users, polls: db.polls, poll_votes: db.poll_votes,
@@ -647,6 +654,10 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
       area_m2: num(body.area_m2), residents_count: Math.max(1, num(body.residents_count) || 1),
       note: String(body.note || '')
     };
+    // v2.22.0 — اعلان دمویی ساخت واحد (اگر تیک خورده باشد)
+    if (notifCfgOf(db).unit_change && me && me.role !== 'admin') {
+      demoNotify('unit_change', 'افزودن/ویرایش/حذف واحد', '🔔 ' + ((db.settings || {}).building_name || 'ساختمان') + '\nافزودن/ویرایش/حذف واحد\n\n• واحد ' + unit.number + ' اضافه شد\n\nانجام‌دهنده: ' + (me.full_name || me.username) + ' — مدیر ساختمان', me, unit.id, unit.number, unit.id);
+    }
     db.units.push(unit);
     save(db);
     return ok({ unit }, 201);
@@ -1561,6 +1572,120 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     const TEHRAN = 12600; // UTC+3:30
     return Math.floor(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 1000) - TEHRAN;
   };
+  // ---------- v2.22.0 — اعلان فعالیت‌ها (آینهٔ src/actnotifs.js) ----------
+  function notifEventsDemo() { return [
+    { key: 'resident_open', group: 'presence', label: 'ساکن اپ را باز کرد', legacy: 'visit_notify_enabled', def: '1' },
+    { key: 'resident_login', group: 'presence', label: 'ساکن وارد اپ شد (نام کاربری/تلگرام)', def: '0' },
+    { key: 'manager_login', group: 'presence', label: 'مدیر ساختمان وارد اپ شد', def: '0' },
+    { key: 'claim_created', group: 'finance', label: 'ساکن رسید پرداخت ثبت کرد', def: '0' },
+    { key: 'payment', group: 'finance', label: 'ثبت/ویرایش/لغو پرداخت و اعتبار اضافه‌پرداخت', def: '0' },
+    { key: 'charge_generate', group: 'finance', label: 'صدور شارژ ماه', def: '0' },
+    { key: 'expense_change', group: 'finance', label: 'ثبت/حذف هزینه مشاع', def: '0' },
+    { key: 'unit_change', group: 'mgmt', label: 'افزودن/ویرایش/حذف واحد', def: '0' },
+    { key: 'resident_change', group: 'mgmt', label: 'ساخت/ویرایش/حذف حساب ساکن', def: '0' },
+    { key: 'poll_change', group: 'mgmt', label: 'نظرسنجی جدید/رأی/بستن نظرسنجی', def: '0' },
+    { key: 'task_change', group: 'mgmt', label: 'کار جدید/انجام/حذف کار', def: '0' },
+    { key: 'reminder', group: 'mgmt', label: 'ارسال یادآوری بدهی (دستی/خودکار)', def: '0' },
+    { key: 'export_import', group: 'security', label: 'خروجی/بکاپ/بازیابی داده', def: '0' },
+    { key: 'message_sent', group: 'security', label: 'پیام شخصی ربات به کاربر', def: '0' }
+  ]; }
+  function notifCfgOf(d) {
+    let cfg = {};
+    try { cfg = JSON.parse((d.settings || {}).admin_notif_cfg || '{}') || {}; } catch { /* fresh */ }
+    const out = {};
+    notifEventsDemo().forEach(e => {
+      if (e.legacy) out[e.key] = (d.settings || {}).visit_notify_enabled !== '0';
+      else out[e.key] = cfg[e.key] === undefined ? e.def === '1' : cfg[e.key] === '1';
+    });
+    return out;
+  }
+  // در دمو: اعلان فقط در گزارش ثبت می‌شود (تلگرام واقعی در کار نیست)
+  function demoNotify(event, title, text, actor, unitId, unitNumber, refId) {
+    db.admin_notifications.push({
+      id: db.seq.admin_notifications++, event, title, text,
+      actor_user_id: actor ? actor.id : null, actor_username: actor ? actor.username : '',
+      actor_role: actor ? actor.role : '', unit_id: unitId || null, unit_number: unitNumber || '',
+      ref_id: refId || null, meta: '', sent: 1, send_error: '',
+      created_at: Math.floor(Date.now() / 1000)
+    });
+    save(db);
+  }
+  if (path === '/a/notifications/config' && method === 'GET') {
+    const g = roleGuard('admin'); if (g) return g;
+    return ok({
+      events: notifEventsDemo().map(e => ({
+        key: e.key, label: e.label, group: e.group,
+        enabled: notifCfgOf(db)[e.key],
+        note: e.key === 'resident_open' ? 'همان اعلان تب «ورود کاربران»' : ''
+      })),
+      groups: [
+        { key: 'presence', label: 'ورود و حضور' },
+        { key: 'finance', label: 'مدیر ساختمان — مالی' },
+        { key: 'mgmt', label: 'مدیر ساختمان — مدیریت' },
+        { key: 'security', label: 'داده و امنیت' }
+      ],
+      admins: db.users.filter(u => u.role === 'admin').map(u => ({
+        id: u.id, username: u.username, full_name: u.full_name || '',
+        telegram_linked: Boolean(u.telegram_linked), telegram_username: u.telegram_username || ''
+      })),
+      bot_configured: Boolean((db.settings || {}).bot_token)
+    });
+  }
+  if (path === '/a/notifications/config' && method === 'POST') {
+    const g = roleGuard('admin'); if (g) return g;
+    const events = (body || {}).events || {};
+    db.settings = db.settings || {};
+    for (const [key, val] of Object.entries(events)) {
+      const e = notifEventsDemo().find(x => x.key === key);
+      if (!e) return err('رویداد ناشناس: ' + key);
+      if (e.legacy) db.settings[e.legacy] = val ? '1' : '0';
+      else {
+        let cfg = {};
+        try { cfg = JSON.parse(db.settings.admin_notif_cfg || '{}') || {}; } catch { /* fresh */ }
+        cfg[key] = val ? '1' : '0';
+        db.settings.admin_notif_cfg = JSON.stringify(cfg);
+      }
+    }
+    save(db);
+    return ok({ ok: true, events: notifCfgOf(db) });
+  }
+  if (path === '/a/notifications' && method === 'GET') {
+    const g = roleGuard('admin'); if (g) return g;
+    const ev = q.get('event') || '';
+    const sent = q.get('sent');
+    let rows = db.admin_notifications.slice().sort((a, b) => b.id - a.id)
+      .filter(x => (!ev || x.event === ev))
+      .filter(x => (sent !== '0' && sent !== '1' ? true : Number(x.sent) === Number(sent)));
+    const total = rows.length;
+    const limit = Math.max(1, Math.min(200, Number(q.get('limit')) || 50));
+    rows = rows.slice(0, limit);
+    return ok({
+      items: rows,
+      total,
+      offset: 0,
+      limit,
+      stats: {
+        sent_count: db.admin_notifications.filter(x => x.sent).length,
+        failed_count: db.admin_notifications.filter(x => !x.sent).length,
+        today_count: db.admin_notifications.filter(x => x.created_at >= Math.floor(Date.now() / 1000) - 86400).length
+      }
+    });
+  }
+  if (path === '/a/notifications/test' && method === 'POST') {
+    const g = roleGuard('admin'); if (g) return g;
+    demoNotify('test', 'اعلان آزمایشی', '🔔 ساختمان نمونه\nاعلان آزمایشی\n\n• این یک اعلان آزمایشی است — اگر این پیام را می‌بینید، اتصال تلگرام مدیرکل درست است.\n\nانجام‌دهنده: سیستم (خودکار)', me, null, '', null);
+    const row = db.admin_notifications.slice().sort((a, b) => b.id - a.id).find(x => x.event === 'test');
+    return ok({ ok: true, sent: row ? Number(row.sent) : 0, send_error: row ? row.send_error : '' });
+  }
+  if (path === '/a/notifications/link' && method === 'POST') {
+    const g = roleGuard('admin'); if (g) return g;
+    if (!(db.settings || {}).bot_token) return err('ابتدا توکن ربات را در تب «تنظیمات اپ» ثبت کنید', 400, 'bot_token_missing');
+    const token = 'demo' + Math.random().toString(36).slice(2, 14) + Math.random().toString(36).slice(2, 10);
+    db.invites = db.invites || [];
+    db.invites.push({ id: db.seq.invites++, token, user_id: me.id, created_by: me.id, created_at: Math.floor(Date.now() / 1000), expires_at: Math.floor(Date.now() / 1000) + 86400, used_at: null, used_by_tg: null });
+    save(db);
+    return ok({ ok: true, url: 'https://t.me/demo_bot?startapp=' + token, expires_at: Math.floor(Date.now() / 1000) + 86400 }, 201);
+  }
   if (path === '/a/visits' && method === 'GET') {
     const g = roleGuard('admin'); if (g) return g;
     const kind = q.get('kind') === 'open' || q.get('kind') === 'login' ? q.get('kind') : '';
@@ -1766,7 +1891,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     };
     return ok({
       installed: true, building_name: db.building_name,
-      app_url: location.origin, version: '2.21.0', counts,
+      app_url: location.origin, version: '2.22.0', counts,
       visits: mockVisitStats(),
       bot: { configured: Boolean(db.bot), connected: Boolean(db.bot && db.bot.connected), username: db.bot ? db.bot.username : null },
       installed_at: Math.floor(Date.now() / 1000)

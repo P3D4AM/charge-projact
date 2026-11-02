@@ -17,6 +17,7 @@ import {
   renderRemindText, DEFAULT_REMIND_TEXT
 } from './scheduler.js';
 import { registerCredit, unitCredit, unitDebtRemaining, autoConsumeCredit, creditTotal } from './credits.js';
+import { notifyActivity } from './actnotifs.js';
 
 // ---------------------------------------------------------------------------
 // UNITS
@@ -86,6 +87,10 @@ route('POST', '/units', async (c) => {
     `).bind(number, residentName, phone, area, residents, note, now()).run();
     const row = await c.env.DB.prepare('SELECT * FROM units WHERE id = ?')
       .bind(res.meta.last_row_id).first();
+    notifyActivity(c.env, c.ctx, 'unit_change', {
+      actor: c.user, unitId: row.id, unitNumber: row.number, refId: row.id,
+      lines: [`واحد ${row.number} اضافه شد` + (row.resident_name ? ` — ساکن: ${row.resident_name}` : '')]
+    });
     return json({ unit: row }, 201);
   } catch (e) {
     if (String(e && e.message).includes('UNIQUE')) return fail('شماره واحد تکراری است', 409);
@@ -111,6 +116,10 @@ route('PUT', '/units/:id', async (c) => {
       WHERE id=?
     `).bind(number, residentName, phone, area, residents, note, id).run();
     const updated = await c.env.DB.prepare('SELECT * FROM units WHERE id = ?').bind(id).first();
+    notifyActivity(c.env, c.ctx, 'unit_change', {
+      actor: c.user, unitId: id, unitNumber: updated.number, refId: id,
+      lines: [`واحد ${updated.number} ویرایش شد`]
+    });
     return json({ unit: updated });
   } catch (e) {
     if (String(e && e.message).includes('UNIQUE')) return fail('شماره واحد تکراری است', 409);
@@ -122,6 +131,10 @@ route('DELETE', '/units/:id', async (c) => {
   const id = Number(c.params.id);
   const row = await c.env.DB.prepare('SELECT id FROM units WHERE id = ?').bind(id).first();
   if (!row) return fail('واحد پیدا نشد', 404);
+  notifyActivity(c.env, c.ctx, 'unit_change', {
+    actor: c.user, unitNumber: row.number, refId: id,
+    lines: [`واحد ${row.number} و همهٔ اقلام مالی آن حذف شد`]
+  });
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM users WHERE unit_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM debts WHERE unit_id = ?').bind(id),
@@ -181,6 +194,10 @@ route('POST', '/residents', async (c) => {
     String(b.phone || unit.phone || '').trim().slice(0, 20),
     unitId, tgUsername, c.user.id, now()).run();
   const row = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(res.meta.last_row_id).first();
+  notifyActivity(c.env, c.ctx, 'resident_change', {
+    actor: c.user, unitId, unitNumber: unit.number, refId: row.id,
+    lines: [`حساب ساکن برای واحد ${unit.number} ساخته شد (نام کاربری: ${username})`]
+  });
   return json({ resident: publicUser(row) }, 201);
 }, 'manager');
 
@@ -223,6 +240,10 @@ route('PUT', '/residents/:id', async (c) => {
     await bumpTokenEpoch(c.env, id);
   }
   const updated = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+  notifyActivity(c.env, c.ctx, 'resident_change', {
+    actor: c.user, unitId: updated.unit_id, refId: id,
+    lines: [`حساب ساکن «${updated.full_name || updated.username}» ویرایش شد`]
+  });
   return json({ resident: publicUser(updated) });
 }, 'manager');
 
@@ -230,6 +251,10 @@ route('PUT', '/residents/:id', async (c) => {
 route('POST', '/residents/:id/message', async (c) => {
   const r = await sendPersonalToUser(c.env, Number(c.params.id), String((c.body || {}).text || ''), c.ctx);
   if (!r.ok) return fail(r.error, r.status || 500, r.code);
+  notifyActivity(c.env, c.ctx, 'message_sent', {
+    actor: c.user, refId: r.user && r.user.id,
+    lines: [`پیام شخصی برای «${(r.user && (r.user.full_name || r.user.username)) || 'کاربر'}» ارسال شد`]
+  });
   return json({ ok: true, user: r.user });
 }, 'manager');
 
@@ -238,6 +263,10 @@ route('DELETE', '/residents/:id', async (c) => {
   const row = await c.env.DB.prepare("SELECT id FROM users WHERE id = ? AND role = 'resident'").bind(id).first();
   if (!row) return fail('حساب ساکن پیدا نشد', 404);
   await c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+  notifyActivity(c.env, c.ctx, 'resident_change', {
+    actor: c.user, refId: id,
+    lines: [`حساب ساکن «${row.username}» حذف شد`]
+  });
   return json({ ok: true });
 }, 'manager');
 
@@ -356,6 +385,12 @@ route('POST', '/charges/generate', async (c) => {
     }
   }
 
+  notifyActivity(c.env, c.ctx, 'charge_generate', {
+    actor: c.user, lines: [
+      `ماه ${periodLabel(period)} — ${stmts.length} قلم شارژ صادر شد` + (existingSet.size ? ` (${existingSet.size} واحد قبلاً صادر شده بود)` : ''),
+      ...(creditUsedTotal > 0 ? [`اعتبار اضافه‌پرداخت ${creditUsedTotal.toLocaleString('en-US')} تومان برای ${creditUnits} واحد به‌صورت خودکار اعمال شد`] : [])
+    ]
+  });
   return json({
     created: stmts.length, skipped: existingSet.size, no_area: noArea,
     credit_used_total: creditUsedTotal, credit_units: creditUnits
@@ -405,6 +440,14 @@ route('POST', '/debts/:id/pay', async (c) => {
   const updated = await c.env.DB.prepare(
     'SELECT d.*, u.number AS unit_number, u.resident_name FROM debts d JOIN units u ON u.id = d.unit_id WHERE d.id = ?'
   ).bind(id).first();
+  notifyActivity(c.env, c.ctx, 'payment', {
+    actor: c.user, unitId: updated.unit_id, unitNumber: updated.unit_number, refId: id,
+    lines: [
+      `${updated.description} — واحد ${updated.unit_number}`,
+      `پرداخت ${applied.toLocaleString('en-US')} تومان ثبت شد (روش: ${method || '—'})`,
+      ...(credited > 0 ? [`اضافه‌پرداخت ${credited.toLocaleString('en-US')} تومان به‌عنوان اعتبار ثبت شد (مانده اعتبار: ${(creditBalance || 0).toLocaleString('en-US')})`] : [])
+    ]
+  });
   return json({ debt: updated, applied, credited, credit_balance: creditBalance });
 }, 'manager');
 
@@ -418,6 +461,10 @@ route('POST', '/debts/:id/unpay', async (c) => {
   const updated = await c.env.DB.prepare(
     'SELECT d.*, u.number AS unit_number, u.resident_name FROM debts d JOIN units u ON u.id = d.unit_id WHERE d.id = ?'
   ).bind(id).first();
+  notifyActivity(c.env, c.ctx, 'payment', {
+    actor: c.user, unitId: updated.unit_id, unitNumber: updated.unit_number, refId: id,
+    lines: [`لغو پرداخت «${updated.description}» — واحد ${updated.unit_number}`]
+  });
   return json({ debt: updated });
 }, 'manager');
 
@@ -445,6 +492,10 @@ route('POST', '/debts/:id/pay-edit', async (c) => {
   const updated = await c.env.DB.prepare(
     'SELECT d.*, u.number AS unit_number, u.resident_name FROM debts d JOIN units u ON u.id = d.unit_id WHERE d.id = ?'
   ).bind(id).first();
+  notifyActivity(c.env, c.ctx, 'payment', {
+    actor: c.user, unitId: updated.unit_id, unitNumber: updated.unit_number, refId: id,
+    lines: [`ویرایش پرداخت «${updated.description}» — واحد ${updated.unit_number} — مبلغ پرداختی: ${amt.toLocaleString('en-US')} تومان`]
+  });
   return json({ debt: updated });
 }, 'manager');
 
@@ -516,6 +567,13 @@ route('POST', '/expenses', async (c) => {
   });
   if (stmts.length) await c.env.DB.batch(stmts);
 
+  notifyActivity(c.env, c.ctx, 'expense_change', {
+    actor: c.user, refId: expenseId,
+    lines: [
+      `هزینه «${title}» ${amount.toLocaleString('en-US')} تومانی در ${periodLabel(period)} ثبت شد`,
+      `تقسیم: ${usedMode === 'area' ? 'بر اساس متراژ' : 'مساوی'} — بین ${stmts.length} واحد`
+    ]
+  });
   return json({
     expense_id: expenseId,
     split_mode: usedMode,
@@ -534,6 +592,10 @@ route('DELETE', '/expenses/:id', async (c) => {
   if (paidRow && paidRow.c > 0) {
     return fail('برای حذف این هزینه، ابتدا پرداخت‌های مرتبط با آن را لغو کنید', 409);
   }
+  notifyActivity(c.env, c.ctx, 'expense_change', {
+    actor: c.user, refId: id,
+    lines: [`هزینه با شناسه ${id} و سهم‌های آن حذف شد`]
+  });
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM debts WHERE expense_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM expenses WHERE id = ?').bind(id)
@@ -626,6 +688,10 @@ route('POST', '/notify/reminders', async (c) => {
       ).bind(now(), r.unit_id).run();
     }
   } catch { /* schema older than v7 → skip counting */ }
+  notifyActivity(c.env, c.ctx, 'reminder', {
+    actor: c.user,
+    lines: [`یادآوری دستی برای ${results2.length} واحد بدهکار — ارسال موفق: ${sent}، ناموفق: ${failed}`]
+  });
   return json({ sent, failed, errors, targets: results2.length, capped: targets0.length >= NOTIFY_CAP });
 }, 'manager');
 
@@ -750,6 +816,12 @@ route('POST', '/autoremind/test', async (c) => {
 route('GET', '/export', async (c) => {
   const type = c.query.get('type') || 'debtors';
   const jy = isJalaliYear(c.query.get('jy') || '') ? c.query.get('jy') : null;
+  // v2.22.0 — اعلان خروجی/بکاپ برای مدیرکل (خودِ مدیرکل گیرنده نیست — actnotifs)
+  const EXPORT_LABELS = { debtors: 'خروجی بدهکاران', year: 'خروجی گزارش سالانه', backup: 'بکاپ کامل' };
+  notifyActivity(c.env, c.ctx, 'export_import', {
+    actor: c.user,
+    lines: [`${EXPORT_LABELS[type] || 'خروجی داده'} (فرمت: ${c.query.get('fmt') || 'csv'}) دریافت شد`]
+  });
   // v2.14.0: fmt=xls -> Excel-friendly .xls (HTML table, UTF-8) that opens with
   // correct columns in every Excel locale; fmt=csv stays the RFC comma format.
   // v2.15.0: fmt=zip for type=backup → backup.json (+ attachments) in ONE zip.
@@ -1171,6 +1243,10 @@ route('POST', '/import', async (c) => {
   } catch (e) {
     return fail('بازیابی ناموفق بود — فایل پشتیبان سالم است؟ (' + (e.message || 'خطای دیتابیس') + ')');
   }
+  notifyActivity(c.env, c.ctx, 'export_import', {
+    actor: c.user,
+    lines: [`بازیابی پشتیبان انجام شد — ${units.length} واحد، ${debts.length} قلم بدهی، ${credits.length} ردیف اعتبار`]
+  });
   return json({
     ok: true,
     imported: {

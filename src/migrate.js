@@ -80,6 +80,23 @@ export function ensureSchema(env) {
       created_by  INTEGER,
       created_at  INTEGER NOT NULL
     )`);
+    // v12-admin-notifs.sql (v2.22.0) — گزارش کامل اعلان‌های فعالیت مدیرکل
+    await ensure(env, 'admin_notifications', 'id', `CREATE TABLE IF NOT EXISTS admin_notifications (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      event            TEXT NOT NULL,
+      title            TEXT NOT NULL DEFAULT '',
+      text             TEXT NOT NULL,
+      actor_user_id    INTEGER,
+      actor_username   TEXT DEFAULT '',
+      actor_role       TEXT DEFAULT '',
+      unit_id          INTEGER,
+      unit_number      TEXT DEFAULT '',
+      ref_id           INTEGER,
+      meta             TEXT DEFAULT '',
+      sent             INTEGER NOT NULL DEFAULT 0,
+      send_error       TEXT DEFAULT '',
+      created_at       INTEGER NOT NULL
+    )`);
   })();
   return env[PROBE];
 }

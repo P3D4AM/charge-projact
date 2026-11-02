@@ -1770,7 +1770,7 @@ BOT_TOKEN=123:ABC npm run deploy:auto</pre>
 // --- panel tutorial (آموزش پنل — v2.10.0) ------------------------------------
 // Full usage tutorial for every tab of this panel. The explanatory note that
 // used to sit at the bottom of the dashboard was moved into section 2 here.
-const PANEL_DOCS_VERSION = '2.20.0';
+const PANEL_DOCS_VERSION = '2.22.0';
 
 function viewTutorial() {
   const parts = [
@@ -1830,6 +1830,15 @@ function viewTutorial() {
       t: '۷) تب «ورود کاربران» — گزارش ورود و سوییچ اعلان',
       b: `<p>هر <b>باز کردن اپ</b> (ورود خودکار با نشست ذخیره‌شده) و هر <b>ورود با نام کاربری</b> (ورود با رمز) اینجا با تاریخ و ساعت شمسی ثبت می‌شود. نگهداری رکوردها <b>۹۰ روز</b> است. فیلترها مثل تب قبل کار می‌کنند: بازه سریع، تقویم شمسی «از/تا»، نوع رویداد (باز کردن اپ / ورود با نام کاربری) و تعداد نمایش در هر صفحه.</p>
       <p><b>اعلان تلگرام هنگام ورود اعضا:</b> با روشن‌بودن این سوییچ، وقتی ساکنی اپ را باز یا وارد شود، پیام کوتاهی <b>فقط برای مدیر اپِ متصل به تلگرام</b> (شما) فرستاده می‌شود — هر ساکن حداکثر هر ۱۰ دقیقه یک‌بار تا اسپم نشوید. <b>پیام ورود اعضا هرگز برای مدیران ساختمان یا خود اعضا ارسال نمی‌شود</b> و گزارشش فقط در همین تب دیده می‌شود. اگر بالای کارت هشدار «توکن ربات ثبت نشده» یا «حساب شما به تلگرام متصل نیست» دیدید، اعلان کار نمی‌کند تا آن مشکل را برطرف کنید.</p>`
+    },
+    {
+      t: '۷‌بیس) تب «اعلان فعالیت‌ها» — چه کاری چه وقت اعلان بفرستد (v2.22.0)',
+      b: `<p>این تب کنترل کامل اعلان‌های فعالیت به دست شماست: از وقتی مدیر ساختمان یا ساکن <b>وارد مینی‌اپ می‌شوند تا کارهایی که داخل اپ انجام می‌دهند</b>. چهار کارت بالای تب، آمار اعلان‌های ۲۴ ساعت اخیر، رسیده‌ها، ارسال‌نشده‌ها و کل گزارش را نشان می‌دهد.</p>
+      <ul class="guide-ul">
+        <li><b>اتصال تلگرام مدیرکل:</b> اگر حساب شما متصل نیست، دکمهٔ «لینک اتصال تلگرام» یک لینک یک‌بارمصرف می‌سازد؛ آن را داخل تلگرام باز کنید و نام کاربری/رمز حساب مدیرکل را وارد کنید. با دکمهٔ «ارسال اعلان آزمایشی» درستی اتصال را همان لحظه امتحان کنید.</li>
+        <li><b>تیک رویدادها:</b> هر فعالیت (ورود ساکن/مدیر، ثبت پرداخت و اعتبار اضافه‌پرداخت، صدور شارژ، هزینه مشاع، واحد و حساب ساکن، رسید پرداخت، نظرسنجی، کار، یادآوری، خروجی/بکاپ/بازیابی و پیام شخصی) یک تیک دارد؛ تیک‌ها را بزنید و «ذخیرهٔ تیک‌ها» را بزنید — از همان لحظه فقط همان‌ها به تلگرام شما می‌آیند. تیک «ساکن اپ را باز کرد» همان سوییچ تب «ورود کاربران» است.</li>
+        <li><b>گزارش کامل اعلان‌ها:</b> پایین تب، متن کامل هر پیام با زمان، انجام‌دهنده و وضعیت ارسال (رسید / دلیل عدم ارسال) ذخیره و قابل فیلتر است — ۱۸۰ روز نگه داشته می‌شود. ارسال نشدن به معنی گم‌شدن رویداد نیست؛ رویداد همیشه در گزارش می‌ماند.</li>
+      </ul>`
     },
     {
       t: '۸) تب «تنظیمات اپ» — ربات، ساختمان و حساب شما',
@@ -2013,8 +2022,151 @@ function mountPerformance() {
 }
 
 // ---------------------------------------------------------------------------
-const VIEWS = { overview: viewOverview, managers: viewManagers, users: viewUsers, botmsgs: viewBotMsgs, visits: viewVisits, settings: viewSettings, tools: viewTools, guide: viewGuide, tutorial: viewTutorial, performance: viewPerformance };
-const MOUNT = { settings: mountSettings, tools: mountTools, botmsgs: mountBotMsgs, visits: mountVisits, performance: mountPerformance };
+// 🔔 اعلان فعالیت‌ها (v2.22.0) — تیک رویدادها + اتصال تلگرام مدیرکل + گزارش کامل
+// ---------------------------------------------------------------------------
+async function viewNotifs() {
+  const cfg = await api('/a/notifications/config');
+  state._notifCfg = cfg;
+  state._nq = state._nq || { event: '', sent: '' };
+  const q = new URLSearchParams();
+  if (state._nq.event) q.set('event', state._nq.event);
+  if (state._nq.sent !== '') q.set('sent', state._nq.sent);
+  q.set('limit', '50');
+  const rep = await api('/a/notifications?' + q.toString());
+  const st = rep.stats || {};
+  const meLinked = (cfg.admins || []).some(a => a.telegram_linked);
+  const warns = [
+    cfg.bot_configured === false ? '<div class="p-note" style="color:var(--danger)">⚠️ توکن ربات ثبت نشده است؛ ابتدا از تب «تنظیمات اپ» ← کارت ربات، توکن را ثبت کنید.</div>' : '',
+    meLinked ? '' : '<div class="p-note" style="color:var(--danger)">⚠️ حساب مدیرکل به تلگرام متصل نیست — با دکمهٔ «لینک اتصال تلگرام» وصل شوید تا اعلان‌ها برسند.</div>'
+  ].filter(Boolean).join('');
+
+  const groupLabel = g => { const x = (cfg.groups || []).find(y => y.key === g); return x ? x.label : g; };
+  const byGroup = {};
+  (cfg.events || []).forEach(e => { (byGroup[e.group] = byGroup[e.group] || []).push(e); });
+  const checklist = Object.keys(byGroup).map(g => `
+    <div class="pcard" style="padding:10px 12px;margin-bottom:8px">
+      <div class="pc-k" style="font-size:12px">${esc(groupLabel(g))}</div>
+      ${byGroup[g].map(e => `
+      <label style="display:flex;align-items:center;gap:10px;padding:7px 2px;cursor:pointer;border-bottom:1px dashed var(--line)">
+        <input type="checkbox" class="nf-ev" data-ev="${esc(e.key)}" ${e.enabled ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--accent)">
+        <span style="flex:1;font-size:13.5px">${esc(e.label)}${e.note ? ` <span class="p-muted" style="font-size:11px">— ${esc(e.note)}</span>` : ''}</span>
+        <span class="p-muted" dir="ltr" style="font-size:10.5px">${esc(e.key)}</span>
+      </label>`).join('')}
+    </div>`).join('');
+
+  const admins = (cfg.admins || []).map(a => `
+    <div class="pcard" style="padding:10px 12px">
+      <div class="pc-k">${esc(a.full_name || a.username)}</div>
+      <div class="p-note" style="color:${a.telegram_linked ? 'var(--ok)' : 'var(--danger)'}">${a.telegram_linked ? '✓ به تلگرام متصل است' : 'به تلگرام متصل نیست'}</div>
+    </div>`).join('');
+
+  const eventOptions = ['<option value="">همهٔ رویدادها</option>']
+    .concat((cfg.events || []).map(e => `<option value="${esc(e.key)}" ${state._nq.event === e.key ? 'selected' : ''}>${esc(e.label)}</option>`)).join('');
+  const sentLabel = e => {
+    if (!e.send_error) return e.sent ? '<span style="color:var(--ok)">✓ رسید</span>' : '<span style="color:var(--danger)">نرسید</span>';
+    const map = { bot_not_configured: 'ربات تنظیم نیست', no_admin_telegram: 'گیرنده‌ای متصل نیست', telegram_rejected: 'تلگرام نپذیرفت' };
+    return `<span style="color:var(--danger)">${esc(map[e.send_error] || e.send_error)}</span>`;
+  };
+  const rows = (rep.items || []).map(n => `
+    <tr>
+      <td style="white-space:nowrap;font-size:12px">${esc(formatJalaliDateTime(n.created_at))}</td>
+      <td style="font-size:12.5px">${esc(n.title)}</td>
+      <td style="font-size:12.5px;white-space:nowrap">${esc(n.actor_username || '')}${n.actor_role ? `<span class="p-muted" style="font-size:10.5px"> ${n.actor_role === 'resident' ? '(ساکن)' : n.actor_role === 'manager' ? '(مدیر)' : ''}</span>` : ''}${!n.actor_username && !n.actor_role ? '<span class="p-muted">سیستم</span>' : ''}</td>
+      <td style="max-width:360px;white-space:normal;font-size:11.5px;color:var(--muted)">${esc(n.text)}</td>
+      <td style="white-space:nowrap">${sentLabel(n)}</td>
+    </tr>`).join('');
+
+  return `
+    <div class="p-head"><h2>🔔 اعلان فعالیت‌ها</h2>
+      <button class="btn ghost" id="nf-refresh">${icon('refresh', 16)} بازخوانی</button>
+    </div>
+    ${warns}
+    <div class="p-cards">
+      <div class="pcard"><div class="pc-k">اعلان ۲۴ ساعت اخیر</div><div class="pc-v">${faNum(st.today_count || 0)}</div></div>
+      <div class="pcard"><div class="pc-k">رسیده به تلگرام</div><div class="pc-v" style="color:var(--ok)">${faNum(st.sent_count || 0)}</div></div>
+      <div class="pcard"><div class="pc-k">ارسال‌نشده</div><div class="pc-v" style="color:${Number(st.failed_count) > 0 ? 'var(--danger)' : 'inherit'}">${faNum(st.failed_count || 0)}</div></div>
+      <div class="pcard"><div class="pc-k">کل گزارش</div><div class="pc-v">${faNum(rep.total || 0)}</div></div>
+    </div>
+    <div class="p-grid2">
+      <div class="pcard wide">
+        <div class="pc-k">اتصال تلگرام مدیرکل</div>
+        <div class="p-grid2" style="margin-top:8px">${admins}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <button class="btn accent" id="nf-link">${icon('link', 15)} لینک اتصال تلگرام (یک‌بارمصرف)</button>
+          <button class="btn subtle" id="nf-test">${icon('bell', 15)} ارسال اعلان آزمایشی</button>
+        </div>
+        <div class="p-note">لینک را داخل تلگرام باز کنید و نام کاربری/رمز حساب مدیرکل را وارد کنید؛ از آن پس اعلان‌های فعال‌شده به تلگرام شما می‌آیند.</div>
+      </div>
+      <div class="pcard wide">
+        <div class="pc-k">کدام فعالیت‌ها اعلان بفرستند؟ (تیک بزنید و ذخیره کنید)</div>
+        <div style="margin-top:8px">${checklist}</div>
+        <button class="btn accent" id="nf-save" style="margin-top:10px">${icon('check', 16)} ذخیرهٔ تیک‌ها</button>
+      </div>
+    </div>
+    <div class="pcard wide" style="margin-top:12px">
+      <div class="pc-k">گزارش کامل اعلان‌های ارسالی — متن، انجام‌دهنده و وضعیت ارسال هر پیام ۱۸۰ روز نگهداری می‌شود</div>
+      <div class="filter-row" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">
+        <select id="nf-event" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)">${eventOptions}</select>
+        <button class="fchip ${state._nq.sent === '0' ? 'on' : ''}" data-nfsent="0">ارسال‌نشده</button>
+        <button class="fchip ${state._nq.sent === '' ? 'on' : ''}" data-nfsent="">همه</button>
+      </div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>زمان</th><th>رویداد</th><th>انجام‌دهنده</th><th>متن پیام</th><th>وضعیت</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="p-muted">هنوز اعلانی ثبت نشده است</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+}
+
+function mountNotifs() {
+  const refresh = $('#nf-refresh');
+  if (refresh) refresh.addEventListener('click', () => navigate('notifs'));
+  const save = $('#nf-save');
+  if (save) save.addEventListener('click', async () => {
+    const events = {};
+    $$('.nf-ev').forEach(cb => { events[cb.dataset.ev] = cb.checked; });
+    save.disabled = true;
+    try {
+      await api('/a/notifications/config', { method: 'POST', body: { events } });
+      toast('تیک اعلان‌ها ذخیره شد', 'ok');
+      navigate('notifs');
+    } catch (e) { toast(e.message, 'err'); save.disabled = false; }
+  });
+  const link = $('#nf-link');
+  if (link) link.addEventListener('click', async () => {
+    link.disabled = true;
+    try {
+      const r = await api('/a/notifications/link', { method: 'POST', body: {} });
+      openModal({
+        title: 'لینک اتصال تلگرام — یک‌بارمصرف',
+        body: `<div class="p-note">این لینک را داخل تلگرام باز کنید (تا ۲۴ ساعت معتبر است) و در صفحهٔ بازشده نام کاربری/رمز حساب مدیرکل را وارد کنید:</div>
+               <div class="pcard" dir="ltr" style="margin-top:8px;word-break:break-all;font-size:12px">${esc(r.url)}</div>`,
+        footer: '<button class="btn accent" data-maction="ok">فهمیدم</button>',
+        onMount(m) { const b = $('[data-maction="ok"]', m.el); if (b) b.addEventListener('click', () => m.close()); }
+      });
+    } catch (e) { toast(e.message, 'err'); }
+    link.disabled = false;
+  });
+  const test = $('#nf-test');
+  if (test) test.addEventListener('click', async () => {
+    test.disabled = true;
+    try {
+      const r = await api('/a/notifications/test', { method: 'POST', body: {} });
+      const why = { bot_not_configured: 'توکن ربات ثبت نشده است', no_admin_telegram: 'حساب شما به تلگرام متصل نیست' };
+      if (r.sent) toast('اعلان آزمایشی به تلگرام شما رسید ✓', 'ok');
+      else toast('ارسال نشد: ' + (why[r.send_error] || r.send_error || 'خطای نامشخص'), 'err', 5200);
+      navigate('notifs');
+    } catch (e) { toast(e.message, 'err'); }
+    test.disabled = false;
+  });
+  const evSel = $('#nf-event');
+  if (evSel) evSel.addEventListener('change', () => { state._nq.event = evSel.value; navigate('notifs'); });
+  $$('[data-nfsent]').forEach(b => b.addEventListener('click', () => { state._nq.sent = b.dataset.nfsent; navigate('notifs'); }));
+}
+
+// ---------------------------------------------------------------------------
+const VIEWS = { overview: viewOverview, managers: viewManagers, users: viewUsers, botmsgs: viewBotMsgs, visits: viewVisits, notifs: viewNotifs, settings: viewSettings, tools: viewTools, guide: viewGuide, tutorial: viewTutorial, performance: viewPerformance };
+const MOUNT2 = { notifs: mountNotifs };
+const MOUNT = { settings: mountSettings, tools: mountTools, botmsgs: mountBotMsgs, visits: mountVisits, performance: mountPerformance, notifs: mountNotifs };
 
 $('#pview').addEventListener('click', e => {
   const el = e.target.closest('[data-act]');

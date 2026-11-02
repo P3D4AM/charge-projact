@@ -3,6 +3,7 @@
 // unit) votes. One vote per (poll, unit) — a household decides together.
 import { route } from './router.js';
 import { json, fail, now } from './helpers.js';
+import { notifyActivity } from './actnotifs.js';
 
 const MAX_OPTIONS = 8;
 const MAX_QUESTION = 160;
@@ -58,6 +59,10 @@ route('POST', '/polls', async (c) => {
     VALUES (?, ?, 'open', ?, ?)
   `).bind(question, JSON.stringify(options), c.user.id, now()).run();
   const poll = await loadPoll(c.env, res.meta.last_row_id);
+  notifyActivity(c.env, c.ctx, 'poll_change', {
+    actor: c.user, refId: poll.id,
+    lines: [`نظرسنجی جدید: «${question}» با ${options.length} گزینه`]
+  });
   return json({ poll }, 201);
 }, 'manager');
 
@@ -130,5 +135,9 @@ route('POST', '/polls/:id/vote', async (c) => {
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(poll_id, unit_id) DO UPDATE SET option_index = excluded.option_index, user_id = excluded.user_id, created_at = excluded.created_at
   `).bind(id, c.unit.id, c.user.id, idx, now()).run();
+  notifyActivity(c.env, c.ctx, 'poll_change', {
+    actor: c.user, unitId: c.unit.id, unitNumber: c.unit.number, refId: id,
+    lines: [`رأی واحد ${c.unit.number} در نظرسنجی ثبت شد`]
+  });
   return json({ poll: await loadPoll(c.env, id) });
 }, 'user');

@@ -18,6 +18,7 @@ import { isJalaliYear, toGregorian, tehranParts, toJalaaliFromParts, faNum, J_MO
 import { buildPerformanceReportPdf, buildTasksReportPdf } from './pdf.js';
 import { getBotToken, sendTelegramMessage } from './telegram.js';
 import { logOutgoingBotMessage } from './botmessages.js';
+import { notifyActivity } from './actnotifs.js';
 import { rememberAppUrl } from './scheduler.js';
 
 const TASK_CATEGORIES = [
@@ -142,6 +143,10 @@ route('POST', '/tasks', async (c) => {
     if (c.ctx && typeof c.ctx.waitUntil === 'function') c.ctx.waitUntil(job);
     else { try { await job; } catch { /* non-fatal */ } }
   }
+  notifyActivity(c.env, c.ctx, 'task_change', {
+    actor: c.user, refId: res.meta.last_row_id,
+    lines: [`کار جدید: «${t.title}»` + (t.cost ? ` — هزینه ${Number(t.cost).toLocaleString('en-US')} تومان` : '')]
+  });
   return json({ task: { ...row, files: [] }, notify_queued: notifyQueued }, 201);
 }, 'manager');
 
@@ -216,6 +221,10 @@ route('PUT', '/tasks/:id', async (c) => {
   `).bind(t.title, t.category, t.description, t.cost, t.doneAt, now(), id).run();
   const updated = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
   const files = await filesForTasks(c.env, [id]);
+  notifyActivity(c.env, c.ctx, 'task_change', {
+    actor: c.user, refId: id,
+    lines: [`کار «${updated.title}» ویرایش شد` + (updated.done_at ? ' (انجام‌شده)' : '')]
+  });
   return json({ task: { ...updated, files: files.get(id) || [] } });
 }, 'manager');
 
@@ -224,6 +233,10 @@ route('DELETE', '/tasks/:id', async (c) => {
   const row = await c.env.DB.prepare('SELECT id FROM tasks WHERE id = ?').bind(id).first();
   if (!row) return fail('کار پیدا نشد', 404);
   // حذف صریح فرزندان (اتکا به CASCADE نداریم — سازگار با هر تنظیم SQLite)
+  notifyActivity(c.env, c.ctx, 'task_change', {
+    actor: c.user, refId: id,
+    lines: [`کار با شناسه ${id} و مدارک آن حذف شد`]
+  });
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM task_file_chunks WHERE file_id IN (SELECT id FROM task_files WHERE task_id = ?)').bind(id),
     c.env.DB.prepare('DELETE FROM task_files WHERE task_id = ?').bind(id),

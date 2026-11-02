@@ -2031,4 +2031,102 @@ const period = currentPeriod();
   assert.equal(unitsAfter.d.units.find(u => u.id === u61id).credit, 50000, 'credit survives restore');
 }
 
+// ---------- 22) v2.22.0 — اعلان فعالیت‌ها برای مدیرکل (admin_notifications) ----------
+// بلوک مستقل: RBAC → تیک‌ها → رویداد فعال/غیرفعال → گزارش کامل → لینک اتصال → تست
+{
+  const env = makeEnv();
+  const inst = await j(await handleApi(req('/install', {
+    method: 'POST', body: { building_name: 'برج اعلان', username: 'Admin', password: 'admin123' }
+  }), env));
+  assert.ok([200, 201].includes(inst.s));
+  const adminT = inst.d.token;
+
+  // (الف) RBAC: مدیر ساختمان به پیکربندی/گزارش اعلان‌ها دسترسی ندارد
+  await j(await handleApi(req('/a/managers', { method: 'POST', body: { username: 'nmgr', password: 'manager123', full_name: 'مدیر اعلان' }, token: adminT }), env));
+  const mT = (await j(await handleApi(req('/auth/login', { method: 'POST', body: { username: 'nmgr', password: 'manager123' } }), env))).d.token;
+  assert.ok(mT);
+  const r403a = await j(await handleApi(req('/a/notifications/config', { token: mT }), env));
+  assert.equal(r403a.s, 403, 'manager cannot read notif config');
+  const r403b = await j(await handleApi(req('/a/notifications', { token: mT }), env));
+  assert.equal(r403b.s, 403, 'manager cannot read notif report');
+
+  // (ب) پیش‌فرض: همه رویدادها خاموش (به‌جز resident_open قدیمی) → رویدادی ثبت نمی‌شود
+  const cfg0 = await j(await handleApi(req('/a/notifications/config', { token: adminT }), env));
+  assert.equal(cfg0.s, 200);
+  assert.equal(cfg0.d.events.length, 14, 'catalog has 14 events');
+  assert.equal(cfg0.d.events.find(e => e.key === 'resident_open').enabled, true, 'resident_open inherits legacy toggle');
+  assert.equal(cfg0.d.events.find(e => e.key === 'payment').enabled, false, 'payment default off');
+  const u0 = await j(await handleApi(req('/units', { method: 'POST', body: { number: '10', resident_name: 'ساکن ده' }, token: mT }), env));
+  assert.equal(u0.s, 201);
+  const rep0 = await j(await handleApi(req('/a/notifications', { token: adminT }), env));
+  assert.equal(rep0.d.total, 0, 'disabled event writes nothing');
+
+  // (ج) تیک unit_change + payment → رویداد ثبت و در گزارش می‌آید
+  const save = await j(await handleApi(req('/a/notifications/config', {
+    method: 'POST', body: { events: { unit_change: true, payment: true, resident_open: false } }, token: adminT
+  }), env));
+  assert.equal(save.s, 200);
+  assert.equal(save.d.events.unit_change, true);
+  // resident_open روی کلید قدیمی می‌نویسد (تب ورود کاربران)
+  const vs = await j(await handleApi(req('/a/visits', { token: adminT }), env));
+  assert.equal(vs.d.notify_enabled, false, 'resident_open tick maps to legacy visit toggle');
+
+  const u1 = await j(await handleApi(req('/units', { method: 'POST', body: { number: '11', resident_name: 'ساکن یازده' }, token: mT }), env));
+  assert.equal(u1.s, 201);
+  const d1 = await j(await handleApi(req('/debts', { method: 'POST', body: { unit_id: u1.d.unit.id, period: '1300-10', amount: 250000, description: 'شارژ اعلان' }, token: mT }), env));
+  assert.equal(d1.s, 201);
+  const pay1 = await j(await handleApi(req(`/debts/${d1.d.debt.id}/pay`, { method: 'POST', body: { amount: 250000, method: 'نقدی' }, token: mT }), env));
+  assert.equal(pay1.s, 200);
+
+  const rep1 = await j(await handleApi(req('/a/notifications', { token: adminT }), env));
+  assert.ok(rep1.d.total >= 2, 'enabled events recorded');
+  const unitRow = rep1.d.items.find(n => n.event === 'unit_change');
+  assert.ok(unitRow, 'unit_change row exists');
+  assert.equal(unitRow.actor_username, 'nmgr', 'actor recorded');
+  assert.equal(unitRow.actor_role, 'manager');
+  assert.ok(unitRow.text.includes('واحد 11'), 'full message text stored');
+  const payRow = rep1.d.items.find(n => n.event === 'payment');
+  assert.ok(payRow && payRow.text.includes('پرداخت'), 'payment row stored');
+  // ارسال: ربات تنظیم نیست ولی ردیف گزارش هست (گزارش کامل مستقل از ارسال)
+  assert.equal(payRow.sent, 0);
+  assert.equal(payRow.send_error, 'bot_not_configured');
+  assert.ok(rep1.d.stats.failed_count >= 2, 'failures counted in stats');
+
+  // (د) فیلتر گزارش بر اساس رویداد
+  const repF = await j(await handleApi(req('/a/notifications?event=unit_change', { token: adminT }), env));
+  assert.ok(repF.d.items.every(n => n.event === 'unit_change'));
+
+  // (هـ) ورود مدیر با تیک manager_login → ردیف ورود
+  const save2 = await j(await handleApi(req('/a/notifications/config', { method: 'POST', body: { events: { manager_login: true } }, token: adminT }), env));
+  assert.equal(save2.s, 200);
+  await j(await handleApi(req('/auth/login', { method: 'POST', body: { username: 'nmgr', password: 'manager123' } }), env));
+  const rep2 = await j(await handleApi(req('/a/notifications?event=manager_login', { token: adminT }), env));
+  assert.ok(rep2.d.items.length >= 1, 'manager login recorded');
+  const loginRow = rep2.d.items[0];
+  assert.ok(loginRow.text.includes('روش ورود'), 'login message includes method');
+  // ادمین خودش اعلان نمی‌گیرد (خود-حذفی)
+  const adminLogins = rep2.d.items.filter(n => n.actor_role === 'admin');
+  assert.equal(adminLogins.length, 0, 'admin actions are never notified');
+
+  // (و) لینک اتصال تلگرام مدیرکل — بدون توکن ربات ۴۰۰؛ با توکن ساختگی لینک می‌سازد
+  const noBot = await j(await handleApi(req('/a/notifications/link', { method: 'POST', body: {} },), env));
+  // توجه: بدون token در req → 401
+  assert.equal(noBot.s, 401);
+  const noBotTok = await j(await handleApi(req('/a/notifications/link', { method: 'POST', body: {}, token: adminT }), env));
+  assert.equal(noBotTok.s, 400); assert.equal(noBotTok.d.code, 'bot_token_missing');
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('bot_token', '1000000000:TESTTOKEN')").run();
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('bot_username', 'notifbot')").run();
+  const link = await j(await handleApi(req('/a/notifications/link', { method: 'POST', body: {}, token: adminT }), env));
+  assert.equal(link.s, 201);
+  assert.ok(link.d.url.startsWith('https://t.me/notifbot?startapp='), 't.me invite link built');
+
+  // (ز) اعلان آزمایشی — مستقل از تیک‌ها ثبت می‌شود
+  const tst = await j(await handleApi(req('/a/notifications/test', { method: 'POST', body: {}, token: adminT }), env));
+  assert.equal(tst.s, 200);
+  assert.equal(tst.d.sent, 0, 'no real telegram in tests');
+  const rep3 = await j(await handleApi(req('/a/notifications?event=test', { token: adminT }), env));
+  assert.equal(rep3.d.items.length, 1, 'test event recorded in report');
+  assert.ok(rep3.d.items[0].text.includes('آزمایشی'));
+}
+
 console.log('test-api: ALL PASSED ✓');

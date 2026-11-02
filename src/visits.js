@@ -20,6 +20,7 @@ import { json, fail, now, getSettings, setSetting } from './helpers.js';
 import { faNum, formatJalaliDateTime, tehranDayStartSec } from './jalali.js';
 import { getBotToken, sendTelegramMessage } from './telegram.js';
 import { logOutgoingBotMessage, isoDateToTehranDayStart } from './botmessages.js';
+import { notifyActivity } from './actnotifs.js';
 
 // pure helpers are unit-tested (scripts/test-visits.mjs)
 export const OPEN_DEDUP_SECONDS = 300;      // don't log another «open» within 5 min
@@ -149,6 +150,22 @@ export async function logVisit(env, user, kind, via, ctx) {
     const p = notifyVisit(env, user, kind, via, ts, lastAt).catch(() => {});
     if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(p);
     else await p;
+
+    // v2.22.0 — اعلان فعالیت برای مدیرکل: ورود ساکن/مدیر ساختمان (تیک پنل ادمین)
+    if (user.role === 'resident') {
+      if (kind === 'login') {
+        notifyActivity(env, ctx, 'resident_login', {
+          actor: user,
+          lines: ['روش ورود: ' + (via === 'telegram' ? 'داخل تلگرام' : 'وب (نام کاربری/رمز)')]
+        });
+      }
+      // «باز کردن اپ» ساکن همان اعلان قدیمی visit_notify_enabled است — در notifyVisit
+    } else if (user.role === 'manager') {
+      notifyActivity(env, ctx, 'manager_login', {
+        actor: user,
+        lines: [kind === 'login' ? 'روش ورود: ' + (via === 'telegram' ? 'داخل تلگرام' : 'وب (نام کاربری/رمز)') : 'اپ را باز کرد']
+      });
+    }
 
     // opportunistic pruning of old rows
     if (Math.random() < 0.1) {

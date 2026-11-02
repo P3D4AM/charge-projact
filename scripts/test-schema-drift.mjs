@@ -8,6 +8,7 @@
 //
 // ایزوله‌سازی: --persist-to یک پوشهٔ موقت محلی؛ به دیتابیس محلی dev و دیتابیس ابری دست نمی‌زند.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -17,17 +18,25 @@ import {
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WRANGLER = path.join(ROOT, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
-const PERSIST = path.join(ROOT, 'out', '.d1-drift-test');
+// v2.22.0 — state موقت روی tmpdir سیستم (نه داخل مخزن) — روی فایل‌سیستم‌های
+// حساس/شبکه‌ای هم پایدار است و مخزن را همیشه تمیز نگه می‌دارد
+const PERSIST = path.join(os.tmpdir(), 'bc-d1-drift-test');
 const DB = 'building-charges';
 
 const results = [];
 const tt = (name, cond) => { results.push(cond); console.log(`  ${cond ? '\x1b[32m[ok]\x1b[0m' : '\x1b[31m[x]\x1b[0m'} ${name}`); };
 
-function d1(command, { expectFail = false } = {}) {
+function d1(command, { expectFail = false, warmup = false } = {}) {
   const r = spawnSync(process.execPath, [WRANGLER, 'd1', 'execute', DB, '--local', '--json',
     '--persist-to', PERSIST, '--command', command, '-y'], { cwd: ROOT, encoding: 'utf8', timeout: 180000 });
   const out = (r.stdout || '') + '\n' + (r.stderr || '');
   if (expectFail) return { ok: r.status === 0, out };
+  // v2.22.0 — روی فایل‌سیستم‌های حساس (سندباکس/شبکه‌ای) workerd گاهی بار اول
+  // SQLITE_IOERR_FSTAT می‌دهد؛ فقط برای warm-up، پوشهٔ state را پاک و یک‌بار دیگر تلاش کن
+  if (warmup && r.status !== 0 && /SQLITE_IOERR|disk I\/O error/i.test(out)) {
+    fs.rmSync(PERSIST, { recursive: true, force: true });
+    return d1(command, { expectFail });
+  }
   if (r.status !== 0) {
     console.error(out.trim().split('\n').slice(-12).join('\n'));
     console.error(`\n[x] local d1 execute failed: ${command.slice(0, 90)}...`);
@@ -42,7 +51,7 @@ try {
   fs.mkdirSync(path.dirname(PERSIST), { recursive: true });
 
   // ۱) دیتابیس تازه از schema.sql فعلی
-  d1(`SELECT 1`); // warm-up (state dir)
+  d1(`SELECT 1`, { warmup: true }); // warm-up (state dir)
   const schemaFile = path.join(ROOT, 'schema.sql');
   const wr = spawnSync(process.execPath, [WRANGLER, 'd1', 'execute', DB, '--local',
     '--persist-to', PERSIST, '--file=./schema.sql', '-y'], { cwd: ROOT, encoding: 'utf8', timeout: 180000 });

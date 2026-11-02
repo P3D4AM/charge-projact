@@ -19,6 +19,7 @@
 //   • تاریخچهٔ اعتبار واحد خود → کاربر دارای واحد ('user' + گارد داخل هندلر)
 import { route } from './router.js';
 import { json, fail, now } from './helpers.js';
+import { notifyActivity } from './actnotifs.js';
 
 const MAX_NOTE = 300;
 const MAX_CREDITS = 20000; // سقف کل ردیف‌های دفتر
@@ -202,6 +203,10 @@ route('POST', '/credits', async (c) => {
     createdBy: c.user.id
   });
   const balance = await unitCredit(c.env, unitId);
+  notifyActivity(c.env, c.ctx, 'payment', {
+    actor: c.user, unitId, unitNumber: unit.number, refId: null,
+    lines: [`اعتبار (اضافه‌پرداخت) ${amount.toLocaleString('en-US')} تومانی برای واحد ${unit.number} ثبت شد — مانده اعتبار: ${balance.toLocaleString('en-US')}`]
+  });
   return json({ ok: true, unit_id: unitId, registered: amount, credit_balance: balance }, 201);
 }, 'manager');
 
@@ -235,6 +240,10 @@ route('POST', '/credits/apply', async (c) => {
   });
   const balance = await unitCredit(c.env, debt.unit_id);
   const remainingAfter = await unitDebtRemaining(c.env, debt.unit_id);
+  notifyActivity(c.env, c.ctx, 'payment', {
+    actor: c.user, unitId: debt.unit_id, refId: debt.id,
+    lines: [`${used.toLocaleString('en-US')} تومان از اعتبار واحد روی قلم «${debt.description || 'بدهی'}» اعمال شد — مانده اعتبار: ${balance.toLocaleString('en-US')}`]
+  });
   return json({ ok: true, used, debt: updated, credit_balance: balance, unit_remaining: remainingAfter });
 }, 'manager');
 
