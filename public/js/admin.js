@@ -1770,7 +1770,7 @@ BOT_TOKEN=123:ABC npm run deploy:auto</pre>
 // --- panel tutorial (آموزش پنل — v2.10.0) ------------------------------------
 // Full usage tutorial for every tab of this panel. The explanatory note that
 // used to sit at the bottom of the dashboard was moved into section 2 here.
-const PANEL_DOCS_VERSION = '2.22.0';
+const PANEL_DOCS_VERSION = '2.23.0';
 
 function viewTutorial() {
   const parts = [
@@ -1838,6 +1838,7 @@ function viewTutorial() {
         <li><b>اتصال تلگرام مدیرکل:</b> اگر حساب شما متصل نیست، دکمهٔ «لینک اتصال تلگرام» یک لینک یک‌بارمصرف می‌سازد؛ آن را داخل تلگرام باز کنید و نام کاربری/رمز حساب مدیرکل را وارد کنید. با دکمهٔ «ارسال اعلان آزمایشی» درستی اتصال را همان لحظه امتحان کنید.</li>
         <li><b>تیک رویدادها:</b> هر فعالیت (ورود ساکن/مدیر، ثبت پرداخت و اعتبار اضافه‌پرداخت، صدور شارژ، هزینه مشاع، واحد و حساب ساکن، رسید پرداخت، نظرسنجی، کار، یادآوری، خروجی/بکاپ/بازیابی و پیام شخصی) یک تیک دارد؛ تیک‌ها را بزنید و «ذخیرهٔ تیک‌ها» را بزنید — از همان لحظه فقط همان‌ها به تلگرام شما می‌آیند. تیک «ساکن اپ را باز کرد» همان سوییچ تب «ورود کاربران» است.</li>
         <li><b>گزارش کامل اعلان‌ها:</b> پایین تب، متن کامل هر پیام با زمان، انجام‌دهنده و وضعیت ارسال (رسید / دلیل عدم ارسال) ذخیره و قابل فیلتر است — ۱۸۰ روز نگه داشته می‌شود. ارسال نشدن به معنی گم‌شدن رویداد نیست؛ رویداد همیشه در گزارش می‌ماند.</li>
+        <li><b>یادآوری دوره‌ای برای مدیر ساختمان (v2.23.0):</b> با دکمهٔ «یادآوری دوره‌ای جدید»، یادآوری‌های تکرارشونده (هر روز / هفتگی / ماهانه با روز مشخص) برای همهٔ مدیران ساختمانِ فعالِ متصل به تلگرام بسازید — مثل «تسویه صندوق ماه» یا «ارسال یادآوری بدهی‌ها». cron روزانهٔ اپ سررسیدها را می‌سنجد و پیام می‌فرستد؛ با «ارسال آزمایشی» هر مورد را فوراً امتحان کنید و هر یادآوری را خاموش/روشن، ویرایش یا حذف کنید. گزارش پیام‌های ارسالی در تب «پیام‌های ربات» ثبت می‌شود.</li>
       </ul>`
     },
     {
@@ -2027,6 +2028,9 @@ function mountPerformance() {
 async function viewNotifs() {
   const cfg = await api('/a/notifications/config');
   state._notifCfg = cfg;
+  // v2.23.0 — یادآوری‌های دوره‌ای برای مدیر ساختمان (ساخت از پنل ادمین)
+  const mr = await api('/a/mreminders').catch(() => ({ items: [], manager_count: 0, reachable: 0 }));
+  state._mrem = mr;
   state._nq = state._nq || { event: '', sent: '' };
   const q = new URLSearchParams();
   if (state._nq.event) q.set('event', state._nq.event);
@@ -2104,6 +2108,28 @@ async function viewNotifs() {
       </div>
     </div>
     <div class="pcard wide" style="margin-top:12px">
+      <div class="pc-k">یادآوری دوره‌ای برای مدیر ساختمان — از طریق نوتیف تلگرام برایش ارسال می‌شود</div>
+      <div class="p-note">${mr.reachable > 0
+        ? `${faNum(mr.reachable)} از ${faNum(mr.manager_count)} مدیر ساختمانِ فعال به تلگرام متصل است — یادآوری‌ها برای همین‌ها فرستاده می‌شود.`
+        : 'هیچ مدیر ساختمانی به تلگرام متصل نیست؛ مدیر باید یک بار داخل تلگرام وارد اپ شود.'}</div>
+      <div style="margin-top:10px">${(mr.items || []).map(r => `
+        <div class="pcard" style="padding:10px 12px;margin-bottom:8px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="flex:1;min-width:180px">
+              <b style="font-size:13.5px">${esc(r.title)}</b>
+              <div class="p-muted" style="font-size:11.5px">${esc(r.freq_label)}${r.text ? ' — ' + esc(r.text.slice(0, 60)) + (r.text.length > 60 ? '…' : '') : ''}</div>
+              ${r.last_sent_at ? `<div class="p-muted" style="font-size:11px">آخرین ارسال: ${esc(formatJalaliDateTime(r.last_sent_at))}</div>` : '<div class="p-muted" style="font-size:11px">هنوز ارسال نشده</div>'}
+            </div>
+            <button class="btn ${r.is_active ? 'ok' : 'ghost'} sm" data-mr-tgl data-id="${r.id}" data-on="${r.is_active}">${r.is_active ? '✓ فعال' : 'خاموش'}</button>
+            <button class="btn subtle sm" data-mr-send data-id="${r.id}">${icon('send', 14)} ارسال آزمایشی</button>
+            <button class="btn ghost sm" data-mr-edit data-id="${r.id}">${icon('edit', 14)}</button>
+            <button class="btn danger sm" data-mr-del data-id="${r.id}">${icon('trash', 14)}</button>
+          </div>
+        </div>`).join('') || '<div class="p-note">هنوز یادآوری دوره‌ای نساخته‌اید.</div>'}</div>
+      <button class="btn accent" id="mr-add" style="margin-top:6px">${icon('plus', 16)} یادآوری دوره‌ای جدید</button>
+      <div class="p-note">دوره‌ها: هر روز • هفتگی (روز هفته) • ماهانه (روز ماه شمسی). cron روزانهٔ اپ سررسیدها را می‌سنجد؛ اگر یک روز از دست برود، در اولین اجرای بعدی جبران می‌شود و هیچ یادآوری در یک دوره دوبار فرستاده نمی‌شود.</div>
+    </div>
+    <div class="pcard wide" style="margin-top:12px">
       <div class="pc-k">گزارش کامل اعلان‌های ارسالی — متن، انجام‌دهنده و وضعیت ارسال هر پیام ۱۸۰ روز نگهداری می‌شود</div>
       <div class="filter-row" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">
         <select id="nf-event" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)">${eventOptions}</select>
@@ -2161,6 +2187,101 @@ function mountNotifs() {
   const evSel = $('#nf-event');
   if (evSel) evSel.addEventListener('change', () => { state._nq.event = evSel.value; navigate('notifs'); });
   $$('[data-nfsent]').forEach(b => b.addEventListener('click', () => { state._nq.sent = b.dataset.nfsent; navigate('notifs'); }));
+
+  // v2.23.0 — یادآوری دوره‌ای مدیر ساختمان
+  const addBtn = $('#mr-add');
+  if (addBtn) addBtn.addEventListener('click', () => openManagerReminderForm(null));
+  $$('[data-mr-tgl]').forEach(b => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await api('/a/mreminders/' + b.dataset.id, { method: 'PUT', body: { is_active: b.dataset.on !== '1' } });
+      toast('وضعیت یادآوری تغییر کرد', 'ok');
+      navigate('notifs');
+    } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+  }));
+  $$('[data-mr-send]').forEach(b => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      const r = await api('/a/mreminders/' + b.dataset.id + '/send', { method: 'POST', body: {} });
+      const why = { bot_token_missing: 'توکن ربات ثبت نشده است', no_manager_telegram: 'مدیری به تلگرام متصل نیست' };
+      if (r.sent) toast(`برای ${faNum(r.sent)} مدیر ساختمان ارسال شد ✓`, 'ok');
+      else toast('ارسال نشد: ' + (why[r.reason] || r.reason || 'خطای نامشخص'), 'err', 5200);
+      navigate('notifs');
+    } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+  }));
+  $$('[data-mr-del]').forEach(b => b.addEventListener('click', async () => {
+    const okd = await confirmDialog('این یادآوری دوره‌ای حذف شود؟');
+    if (!okd) return;
+    try {
+      await api('/a/mreminders/' + b.dataset.id, { method: 'DELETE', body: {} });
+      toast('یادآوری حذف شد', 'ok');
+      navigate('notifs');
+    } catch (e) { toast(e.message, 'err'); }
+  }));
+  $$('[data-mr-edit]').forEach(b => b.addEventListener('click', () => {
+    const item = ((state._mrem || {}).items || []).find(x => Number(x.id) === Number(b.dataset.id));
+    if (item) openManagerReminderForm(item);
+  }));
+}
+
+// فرم ساخت/ویرایش یادآوری دوره‌ای مدیر ساختمان (v2.23.0)
+function openManagerReminderForm(item) {
+  const it = item || { title: '', text: '', freq: 'monthly', weekday: 6, month_day: 1, is_active: 1 };
+  const weekOpts = ['شنبه', 'یک‌شنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
+  const dayOpts = Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}" ${Number(it.month_day || 1) === i + 1 ? 'selected' : ''}>روز ${faNum(i + 1)}</option>`).join('');
+  openModal({
+    title: item ? 'ویرایش یادآوری دوره‌ای' : 'یادآوری دوره‌ای جدید برای مدیر ساختمان',
+    body: `
+      <div class="form-grid">
+        <div class="field"><label>عنوان *</label><input id="mre-title" value="${esc(it.title)}" placeholder="مثلاً: تسویه صندوق ماه"></div>
+        <div class="field"><label>متن (اختیاری)</label><textarea id="mre-text" rows="3">${esc(it.text || '')}</textarea></div>
+        <div class="field"><label>دوره</label>
+          <select id="mre-freq">
+            <option value="monthly" ${it.freq === 'monthly' ? 'selected' : ''}>ماهانه</option>
+            <option value="weekly" ${it.freq === 'weekly' ? 'selected' : ''}>هفتگی</option>
+            <option value="daily" ${it.freq === 'daily' ? 'selected' : ''}>هر روز</option>
+          </select></div>
+        <div class="field" id="mre-week-wrap" style="display:none"><label>روز هفته</label>
+          <select id="mre-week">${weekOpts.map((w, i) => `<option value="${i}" ${Number(it.weekday) === i ? 'selected' : ''}>${w}</option>`).join('')}</select></div>
+        <div class="field" id="mre-day-wrap" style="display:none"><label>روز ماه (شمسی — ۱ تا ۲۸)</label>
+          <select id="mre-day">${dayOpts}</select>
+          <div class="hint">از این روز به بعدِ هر ماه، در اولین اجرای cron یادآوری می‌رود.</div></div>
+      </div>`,
+    footer: `
+      <button class="btn subtle" data-maction="cancel">انصراف</button>
+      <button class="btn accent" data-maction="save">${icon('check', 16)} ${item ? 'ذخیرهٔ تغییرات' : 'ساخت یادآوری'}</button>`,
+    onMount(m) {
+      const freqSel = $('#mre-freq', m.el);
+      const sync = () => {
+        $('#mre-week-wrap', m.el).style.display = freqSel.value === 'weekly' ? '' : 'none';
+        $('#mre-day-wrap', m.el).style.display = freqSel.value === 'monthly' ? '' : 'none';
+      };
+      freqSel.addEventListener('change', sync);
+      sync();
+      $$('[data-maction]', m.el).forEach(b => b.addEventListener('click', async () => {
+        const act = b.dataset.maction;
+        if (act === 'cancel') { m.close(); return; }
+        if (act === 'save') {
+          b.disabled = true;
+          const body = {
+            title: $('#mre-title', m.el).value.trim(),
+            text: $('#mre-text', m.el).value.trim(),
+            freq: freqSel.value,
+            weekday: Number($('#mre-week', m.el).value),
+            month_day: Number($('#mre-day', m.el).value)
+          };
+          if (!body.title) { toast('عنوان را وارد کنید', 'err'); b.disabled = false; return; }
+          try {
+            if (item) await api('/a/mreminders/' + item.id, { method: 'PUT', body });
+            else await api('/a/mreminders', { method: 'POST', body });
+            toast('یادآوری دوره‌ای ذخیره شد', 'ok');
+            m.close();
+            navigate('notifs');
+          } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+        }
+      }));
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -2129,4 +2129,124 @@ const period = currentPeriod();
   assert.ok(rep3.d.items[0].text.includes('آزمایشی'));
 }
 
+// ---------- 23) v2.23.0 — صدور خودکار شارژ ماهانه ----------
+{
+  const env = makeEnv();
+  const inst = await j(await handleApi(req('/install', {
+    method: 'POST', body: { building_name: 'برج خودکار', username: 'Admin', password: 'admin123' }
+  }), env));
+  const adminT = inst.d.token;
+  await j(await handleApi(req('/a/managers', { method: 'POST', body: { username: 'acmgr', password: 'manager123', full_name: 'مدیر خودکار' }, token: adminT }), env));
+  const mT = (await j(await handleApi(req('/auth/login', { method: 'POST', body: { username: 'acmgr', password: 'manager123' } }), env))).d.token;
+  assert.ok(mT);
+
+  // RBAC: ساکن/ادمین به مسیرهای مدیر ساختمان دسترسی ندارند
+  await j(await handleApi(req('/units', { method: 'POST', body: { number: '1', resident_name: 'ساکن یک' }, token: mT }), env));
+  await j(await handleApi(req('/units', { method: 'POST', body: { number: '2', resident_name: 'ساکن دو' }, token: mT }), env));
+  await j(await handleApi(req('/residents', { method: 'POST', body: { unit_id: 1, username: 'ac_res1', password: '123456' }, token: mT }), env));
+  const rT = (await j(await handleApi(req('/auth/login', { method: 'POST', body: { username: 'ac_res1', password: '123456' } }), env))).d.token;
+  const r403 = await j(await handleApi(req('/autocharge', { token: rT }), env));
+  assert.equal(r403.s, 403, 'resident cannot read autocharge config');
+  const a403 = await j(await handleApi(req('/autocharge/run', { method: 'POST', body: {}, token: adminT }), env));
+  assert.equal(a403.s, 403, 'admin cannot run manager autocharge');
+
+  // پیش‌فرض خاموش
+  const g0 = await j(await handleApi(req('/autocharge', { token: mT }), env));
+  assert.equal(g0.s, 200);
+  assert.equal(g0.d.cfg.enabled, false, 'autocharge default off');
+  assert.equal(g0.d.ticked, 0, 'no units ticked initially');
+
+  // ذخیرهٔ پیکربندی + اعتبارسنجی مبلغ
+  const bad = await j(await handleApi(req('/autocharge', { method: 'PUT', body: { enabled: true, day: 3, amount: 0, mode: 'fixed' }, token: mT }), env));
+  assert.equal(bad.s, 400, 'enabled without amount rejected');
+  const put = await j(await handleApi(req('/autocharge', { method: 'PUT', body: { enabled: true, day: 3, amount: 500000, mode: 'fixed' }, token: mT }), env));
+  assert.equal(put.s, 200); assert.equal(put.d.cfg.enabled, true); assert.equal(put.d.cfg.day, 3);
+
+  // تیک واحدها — فقط تیک‌خورده‌ها صادر می‌شوند
+  const t1 = await j(await handleApi(req('/autocharge/unit', { method: 'PUT', body: { unit_id: 1, on: true }, token: mT }), env));
+  assert.equal(t1.d.on, true); assert.equal(t1.d.ticked, 1);
+  await j(await handleApi(req('/autocharge/unit', { method: 'PUT', body: { unit_id: 2, on: true }, token: mT }), env));
+
+  // اجرای دستی: هر دو واحد تیک‌خورده صادر می‌شوند
+  const run = await j(await handleApi(req('/autocharge/run', { method: 'POST', body: {}, token: mT }), env));
+  assert.equal(run.s, 200);
+  const r1 = run.d.result;
+  assert.equal(r1.ran, true);
+  assert.equal(r1.created, 2, 'created for both ticked units');
+  assert.ok(r1.period && /-\d{2}$/.test(r1.period), 'current jalali period');
+
+  // اجرای دوم: اقلام تکراری رد می‌شوند
+  const run2 = await j(await handleApi(req('/autocharge/run', { method: 'POST', body: {}, token: mT }), env));
+  assert.equal(run2.d.result.created, 0, 'second run issues nothing (dedup)');
+  assert.equal(run2.d.result.skipped, 2);
+
+  // ردیف‌های صادرشده فقط برای واحدهای تیک‌خورده + مبلغ درست
+  const debts = (await j(await handleApi(req('/debts?period=' + r1.period, { token: mT }), env))).d.debts;
+  const monthly = debts.filter(d => d.kind === 'monthly');
+  assert.equal(monthly.length, 2, 'only ticked units got items');
+  assert.ok(monthly.every(d => d.amount === 500000), 'fixed amount applied');
+
+  // مُهر ماه: خواندن پیکربندی نشان می‌دهد ماه جاری اجرا شده
+  const g1 = await j(await handleApi(req('/autocharge', { token: mT }), env));
+  assert.equal(g1.d.last_period, r1.period, 'month marker set');
+
+  // اعلان فعالیت مدیرکل (v2.22 hooks) — صدور خودکار با بازیگر سیستم ثبت می‌شود
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('admin_notif_cfg', '{\"charge_generate\":\"1\"}')").run();
+  const run3 = await j(await handleApi(req('/autocharge/run', { method: 'POST', body: {}, token: mT }), env));
+  assert.equal(run3.s, 200);
+  const rep = await j(await handleApi(req('/a/notifications?event=charge_generate', { token: adminT }), env));
+  const sysRow = rep.d.items.find(n => n.text.includes('صدور خودکار'));
+  assert.ok(sysRow, 'system actor row recorded for auto-charge');
+  assert.equal(sysRow.actor_role, '', 'actor is system (no user)');
+}
+
+// ---------- 24) v2.23.0 — یادآوری دوره‌ای مدیر ساختمان (فقط مدیرکل) ----------
+{
+  const env = makeEnv();
+  const inst = await j(await handleApi(req('/install', {
+    method: 'POST', body: { building_name: 'برج یادآور', username: 'Admin', password: 'admin123' }
+  }), env));
+  const adminT = inst.d.token;
+  await j(await handleApi(req('/a/managers', { method: 'POST', body: { username: 'mrmgr', password: 'manager123', full_name: 'مدیر یادآور' }, token: adminT }), env));
+  const mT = (await j(await handleApi(req('/auth/login', { method: 'POST', body: { username: 'mrmgr', password: 'manager123' } }), env))).d.token;
+
+  // RBAC
+  const m403 = await j(await handleApi(req('/a/mreminders', { token: mT }), env));
+  assert.equal(m403.s, 403, 'manager cannot list periodic reminders');
+
+  // ساخت ماهانه + هفتگی + اعتبارسنجی
+  const bad0 = await j(await handleApi(req('/a/mreminders', { method: 'POST', body: { title: '', freq: 'monthly' }, token: adminT }), env));
+  assert.equal(bad0.s, 400, 'empty title rejected');
+  const mk1 = await j(await handleApi(req('/a/mreminders', { method: 'POST', body: { title: 'تسویه صندوق ماه', text: 'لطفاً صندوق را تسویه کنید', freq: 'monthly', month_day: 3 }, token: adminT }), env));
+  assert.equal(mk1.s, 201);
+  assert.equal(mk1.d.item.freq_label.includes('ماهانه'), true, 'monthly label');
+  const mk2 = await j(await handleApi(req('/a/mreminders', { method: 'POST', body: { title: 'تماس با انجمن', freq: 'weekly', weekday: 6 }, token: adminT }), env));
+  assert.ok(mk2.d.item.freq_label.includes('جمعه'), 'weekly label shows weekday');
+  const mk3 = await j(await handleApi(req('/a/mreminders', { method: 'POST', body: { title: 'بررسی صندوق', freq: 'daily' }, token: adminT }), env));
+  assert.equal(mk3.d.item.freq_label, 'هر روز', 'daily label');
+
+  // فهرست + شمار مدیران
+  const list = await j(await handleApi(req('/a/mreminders', { token: adminT }), env));
+  assert.equal(list.d.items.length, 3);
+  assert.equal(list.d.manager_count, 1, 'one active manager');
+  assert.equal(list.d.reachable, 0, 'manager has no telegram yet');
+
+  // ارسال آزمایشی — بدون توکن ربات خطای روشن می‌دهد
+  const noBot = await j(await handleApi(req(`/a/mreminders/${mk1.d.item.id}/send`, { method: 'POST', body: {}, token: adminT }), env));
+  assert.equal(noBot.s, 200);
+  assert.equal(noBot.d.reason, 'bot_token_missing', 'clear reason without bot token');
+
+  // ویرایش (تغییر دوره مُهر را پاک می‌کند) + خاموش/روشن + حذف
+  const up = await j(await handleApi(req(`/a/mreminders/${mk2.d.item.id}`, { method: 'PUT', body: { freq: 'daily' }, token: adminT }), env));
+  assert.equal(up.s, 200); assert.equal(up.d.item.freq, 'daily');
+  const tgl = await j(await handleApi(req(`/a/mreminders/${mk3.d.item.id}`, { method: 'PUT', body: { is_active: false }, token: adminT }), env));
+  assert.equal(tgl.d.item.is_active, 0, 'deactivated');
+  const list2 = await j(await handleApi(req('/a/mreminders', { token: adminT }), env));
+  assert.equal(list2.d.items.filter(x => x.is_active).length, 2, 'only active ones counted');
+  const del = await j(await handleApi(req(`/a/mreminders/${mk3.d.item.id}`, { method: 'DELETE', body: {}, token: adminT }), env));
+  assert.equal(del.s, 200);
+  const gone = await j(await handleApi(req(`/a/mreminders/${mk3.d.item.id}`, { method: 'PUT', body: { is_active: true }, token: adminT }), env));
+  assert.equal(gone.s, 404, 'deleted reminder is gone');
+}
+
 console.log('test-api: ALL PASSED ✓');

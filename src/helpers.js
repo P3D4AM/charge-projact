@@ -1,6 +1,6 @@
 // Shared API helpers.
 export const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
-export const APP_VERSION = '2.22.0';
+export const APP_VERSION = '2.23.0';
 
 export function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), { status, headers: { ...JSON_HEADERS, ...extra } });

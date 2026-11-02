@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS units (
   area_m2          REAL NOT NULL DEFAULT 0,
   residents_count  INTEGER NOT NULL DEFAULT 1,
   note             TEXT DEFAULT '',
+  auto_charge      INTEGER NOT NULL DEFAULT 0,  -- v13: تیک شارژ خودکار ماهانه
   created_at       INTEGER NOT NULL
 );
 
@@ -262,3 +263,21 @@ CREATE TABLE IF NOT EXISTS admin_notifications (
 
 CREATE INDEX IF NOT EXISTS idx_admin_notif_event ON admin_notifications(event);
 CREATE INDEX IF NOT EXISTS idx_admin_notif_time  ON admin_notifications(created_at);
+
+-- v13 (v2.23.0): یادآوری‌های دوره‌ای که مدیرکل از پنل برای مدیر ساختمان می‌سازد؛
+-- cron روزانه سررسیدها را می‌سنجد و با ربات برای مدیر می‌فرستد.
+CREATE TABLE IF NOT EXISTS manager_reminders (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  title             TEXT NOT NULL,
+  text              TEXT DEFAULT '',
+  freq              TEXT NOT NULL DEFAULT 'monthly',
+  weekday           INTEGER,
+  month_day         INTEGER,
+  is_active         INTEGER NOT NULL DEFAULT 1,
+  last_sent_at      INTEGER,
+  last_sent_day     TEXT DEFAULT '',
+  last_sent_period  TEXT DEFAULT '',
+  created_at        INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mreminders_active ON manager_reminders(is_active);

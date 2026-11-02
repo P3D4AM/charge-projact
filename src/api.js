@@ -25,6 +25,7 @@ import './claims.js';
 import './invites.js';
 import './credits.js';
 import './actnotifs.js';
+import './mreminders.js';
 
 // ---------------------------------------------------------------------------
 // PUBLIC

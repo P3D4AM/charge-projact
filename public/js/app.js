@@ -1307,6 +1307,7 @@ function pendingClaimCard(c) {
         </div>
         ${claimStatusChip(c.status)}
       </div>
+      ${(() => { const rem = Number(c.unit_remaining) || 0; return rem > 0 ? `<div class="t2" style="color:var(--danger);margin-top:4px">مانده بدهی واحد: ${fmtMoney(rem)}</div>` : ''; })()}
       <div class="kv" style="margin-top:8px"><span class="k">مبلغ اعلام‌شده</span><span class="v">${fmtMoney(c.amount)}</span></div>
       ${c.note ? `<div class="kv"><span class="k">توضیح ساکن</span><span class="v" style="white-space:normal;text-align:left">${esc(c.note)}</span></div>` : ''}
       <div class="kv"><span class="k">تاریخ ثبت</span><span class="v">${claimDate(c.created_at)}</span></div>
@@ -1328,6 +1329,7 @@ function doneClaimRow(c) {
       <div class="mid">
         <div class="t1">${esc(c.unit_resident || unitWord(c.unit_number))} — ${fmtMoney(c.status === 'confirmed' ? (c.confirmed_amount || 0) : c.amount)}</div>
         <div class="t2">${c.status === 'rejected' && c.reject_note ? 'دلیل: ' + esc(c.reject_note) : (c.note ? esc(c.note) : '')} • ${claimDate(c.confirmed_at || c.created_at)}</div>
+        ${(() => { const rem = Number(c.unit_remaining) || 0; return rem > 0 ? `<div class="t2" style="color:var(--danger)">مانده بدهی واحد: ${fmtMoney(rem)}</div>` : ''; })()}
       </div>
       <div class="end" style="display:flex;align-items:center;gap:8px">
         ${file ? `<button class="btn subtle sm" data-action="claim-file" data-id="${file.id}">${icon('clip', 13)}</button>` : ''}
@@ -1558,13 +1560,16 @@ async function rejectClaim(id) {
 // Views — Charges (period ledger)
 // ---------------------------------------------------------------------------
 async function viewCharges() {
-  const [debtsRes, dash, claimsRes] = await Promise.all([
+  const [debtsRes, dash, claimsRes, unitsRes] = await Promise.all([
     api('/debts?period=' + state.period),
     api('/dashboard?period=' + state.period),
     // v2.16.0 — رسیده‌های پرداخت ساکنین (بررسی فیش واریزی)
-    api('/claims').catch(() => ({ claims: [] }))
+    api('/claims').catch(() => ({ claims: [] })),
+    // v2.23.0 — ماندهٔ کل بدهی هر واحد (نمایش زیر وضعیت مثل تب واحدها)
+    api('/units').catch(() => ({ units: [] }))
   ]);
   const debts = debtsRes.debts || [];
+  state._unitDebt = new Map((unitsRes.units || []).map(u => [u.id, Number(u.debt) || 0]));
   debts.forEach(x => { state.debtCache[x.id] = x; });
   const f = state.filter.charges;
   const list = debts.filter(x => f === 'all' || (f === 'unpaid' ? x.status !== 'paid' : x.status === 'paid'));
@@ -1591,9 +1596,10 @@ async function viewCharges() {
         <div class="t2">${esc(x.description)}</div>
         ${x.note ? `<div class="note-line">${esc(x.note)}</div>` : ''}
       </div>
-      <div class="end">
+      <div class="end" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         <span class="amount">${fmtMoney(x.amount)}</span>
         ${statusChip(x.status)}
+        ${(() => { const rem = (state._unitDebt || new Map()).get(x.unit_id) || 0; return rem > 0 ? `<div class="t2" style="color:var(--danger);font-size:11px">مانده بدهی واحد: ${fmtMoney(rem)}</div>` : ''; })()}
       </div>
     </div>
     ${x.status !== 'paid' ? `<div style="display:flex;gap:8px;margin:-4px 0 8px;padding:0 4px">
@@ -2548,11 +2554,14 @@ async function pollVote(pollId, optIdx) {
 async function viewReports() {
   const isManager = state.role === 'manager';
   // auto-reminder config loads together with the report (manager only; failure-tolerant)
-  const [rep, arRes] = await Promise.all([
+  const [rep, arRes, acRes] = await Promise.all([
     api('/reports/year?jy=' + state.jy),
-    isManager ? api('/autoremind').catch(() => null) : Promise.resolve(null)
+    isManager ? api('/autoremind').catch(() => null) : Promise.resolve(null),
+    // v2.23.0 — صدور خودکار شارژ (فقط مدیر ساختمان)
+    isManager ? api('/autocharge').catch(() => null) : Promise.resolve(null)
   ]);
   state.autoRemind = arRes;
+  state.autoCharge = acRes;
   const months = Array.from({ length: 12 }, (_, i) => `${state.jy}-${String(i + 1).padStart(2, '0')}`);
   const sMap = {};
   (rep.series || []).forEach(s => { sMap[s.period] = s; });
@@ -2622,6 +2631,11 @@ async function viewReports() {
         <div class="badge gray">${icon('bell')}</div>
         <div class="mid"><div class="t1">یادآوری بدهی</div><div class="t2">ارسال پیام خودکار به واحدهای بدهکار</div></div>
         <button class="btn ghost sm" data-action="remind">ارسال</button>
+      </div>
+      <div class="row">
+        <div class="badge gray">${icon('card')}</div>
+        <div class="mid"><div class="t1">صدور خودکار شارژ ماهانه</div><div class="t2">${acLineText(state.autoCharge)}</div></div>
+        <button class="btn ghost sm" data-action="autocharge">تنظیم</button>
       </div>
       <div class="row">
         <div class="badge gray">${icon('refresh')}</div>
@@ -2953,6 +2967,141 @@ function openAutoRemindModal() {
 }
 
 // ---------------------------------------------------------------------------
+// v2.23.0 — صدور خودکار شارژ ماهانه (کارت گزارش‌ها + مودال تنظیم)
+// ---------------------------------------------------------------------------
+function acLineText(ac) {
+  if (!ac) return 'در دسترس نیست';
+  const c = ac.cfg || {};
+  const on = Boolean(c.enabled);
+  const modeTxt = { fixed: 'مبلغ ثابت', area: 'بر اساس متراژ', person: 'بر اساس نفرات' }[c.mode] || 'مبلغ ثابت';
+  const base = on ? '✓ فعال' : 'غیرفعال';
+  return `${base} • روز ${faNum(c.day || 1)} هر ماه • ${modeTxt} • ${faNum(ac.ticked || 0)} واحد تیک‌خورده`;
+}
+
+async function openAutoChargeModal() {
+  let ac = state.autoCharge;
+  try { ac = await api('/autocharge'); } catch (e) { toast(e.message, 'err'); return; }
+  state.autoCharge = ac;
+  const cfg = ac.cfg || {};
+  const units = ac.units || [];
+  const dayOpts = Array.from({ length: 28 }, (_, i) =>
+    `<option value="${i + 1}" ${Number(cfg.day || 1) === i + 1 ? 'selected' : ''}>روز ${faNum(i + 1)}</option>`).join('');
+  const modes = [
+    ['fixed', 'مبلغ ثابت', 'برای هر واحد'],
+    ['area', 'بر اساس متراژ', 'هر متر مربع'],
+    ['person', 'بر اساس نفرات', 'هر نفر']
+  ];
+  const botWarn = ac.bot_configured === false
+    ? '<div class="hint" style="color:var(--danger)">⚠️ توکن ربات در پنل مدیریت اپ ثبت نشده است؛ صدور انجام می‌شود ولی پیام تلگرام به ساکنین نمی‌رسد.</div>'
+    : '';
+  openModal({
+    title: 'صدور خودکار شارژ ماهانه',
+    body: `
+      <div class="form-grid">
+        <div class="field"><button type="button" id="ac-on" class="${cfg.enabled ? 'btn ok' : 'btn ghost'}">${cfg.enabled ? '✓ فعال — صدور خودکار ماهانه' : 'غیرفعال — صدور خودکار خاموش است'}</button>
+          <div class="hint">از روز انتخابی هر ماه شمسی، برای واحدهای تیک‌خورده قلم «شارژ ماهانه» صادر می‌شود، اعتبار اضافه‌پرداخت مثل صدور دستی اعمال می‌شود و ساکن متصل هر واحد پیام تلگرام می‌گیرد. در هر ماه فقط یک‌بار.</div></div>
+        <div class="field"><label>روز صدور در ماه (شمسی)</label>
+          <select id="ac-day">${dayOpts}</select>
+          <div class="hint">اگر اپ در آن روز روشن نشده باشد، اولین اجرای بعدی جبران می‌کند.</div></div>
+        <div class="field"><label>روش محاسبه</label>
+          <div class="radio-cards" id="ac-modes">
+            ${modes.map(([v, t, s2]) => `<button type="button" class="rcard ${(cfg.mode || 'fixed') === v ? 'on' : ''}" data-mode="${v}">${t}<small>${s2}</small></button>`).join('')}
+          </div></div>
+        ${moneyField({ id: 'ac-amount', label: 'مبلغ پایه (تومان)', value: cfg.amount ? Number(cfg.amount).toLocaleString('en-US') : '', required: true })}
+        <div class="field"><label>واحدهای صدور خودکار — با لمس تیک می‌خورد (${faNum(ac.ticked || 0)} فعال از ${faNum(units.length)})</label>
+          ${units.length ? `<div class="filter-row" id="ac-units" style="flex-wrap:wrap">
+            ${units.map(u => `<button type="button" class="fchip ${u.auto_charge ? 'on' : ''}" data-ac-unit="${u.id}" title="${esc(u.resident_name || '')}">${esc(faNum(unitNo(u.number)))}</button>`).join('')}
+          </div>
+          <div class="hint">واحدهایی که «شارژ ماهانه»ِ این ماه را قبلاً دستی گرفته‌اند، در اجرای خودکار رد می‌شوند (تکراری صادر نمی‌شود).</div>` : '<div class="hint">هنوز واحدی ثبت نکرده‌اید.</div>'}
+        </div>
+        ${botWarn}
+      </div>
+      <div class="rows" style="margin-top:12px">
+        <button class="btn subtle block" data-maction="run">${icon('bell', 16)} صدور همین حالا (دستی)</button>
+      </div>`,
+    footer: `
+      <button class="btn subtle" data-maction="cancel">انصراف</button>
+      <button class="btn" data-maction="save">${icon('check', 16)} ذخیره</button>`,
+    onMount(m) {
+      let mode = cfg.mode || 'fixed';
+      const tgl = $('#ac-on', m.el);
+      const setTgl = on => {
+        tgl.dataset.on = on ? '1' : '0';
+        tgl.className = on ? 'btn ok' : 'btn ghost';
+        tgl.textContent = on ? '✓ فعال — صدور خودکار ماهانه' : 'غیرفعال — صدور خودکار خاموش است';
+      };
+      tgl.dataset.on = cfg.enabled ? '1' : '0';
+      tgl.addEventListener('click', () => setTgl(tgl.dataset.on !== '1'));
+      $$('#ac-modes [data-mode]', m.el).forEach(b => b.addEventListener('click', () => {
+        mode = b.dataset.mode;
+        $$('#ac-modes [data-mode]', m.el).forEach(x => x.classList.toggle('on', x === b));
+      }));
+      // تیک واحدها — ذخیرهٔ فوری
+      $$('#ac-units [data-ac-unit]', m.el).forEach(b => b.addEventListener('click', async () => {
+        const on = !b.classList.contains('on');
+        b.disabled = true;
+        try {
+          await api('/autocharge/unit', { method: 'PUT', body: { unit_id: Number(b.dataset.acUnit), on } });
+          b.classList.toggle('on', on);
+          haptic('success');
+        } catch (e) { toast(e.message, 'err'); }
+        b.disabled = false;
+      }));
+
+      const saveCfg = async () => api('/autocharge', {
+        method: 'PUT',
+        body: {
+          enabled: tgl.dataset.on === '1',
+          day: Number($('#ac-day', m.el).value),
+          mode,
+          amount: parseNum($('#ac-amount', m.el).value)
+        }
+      });
+
+      $$('[data-maction]', m.el).forEach(b => b.addEventListener('click', async () => {
+        const act = b.dataset.maction;
+        if (act === 'cancel') { m.close(); return; }
+        if (act === 'run') {
+          const okd = await confirmDialog(
+            'صدور خودکار همین حالا اجرا شود؟\n(ماه جاری مُهر می‌شود و دیگر در cron اجرا نمی‌شود؛ اقلام تکراری رد می‌شوند)'
+          );
+          if (!okd) return;
+          b.disabled = true;
+          try {
+            await saveCfg();
+            const res = await api('/autocharge/run', { method: 'POST', body: {} });
+            const r = res.result || {};
+            if (r.reason === 'no_units') toast('هیچ واحدی تیک نخورده است؛ اول واحدها را انتخاب کنید', 'info', 6000);
+            else if (r.reason === 'no_amount') toast('مبلغ پایه را وارد کنید', 'err');
+            else {
+              haptic('success');
+              let t = `صدور انجام شد: ${faNum(r.created || 0)} قلم تازه`;
+              if (r.skipped) t += ` • ${faNum(r.skipped)} ردشده (قبلاً صادرشده)`;
+              if (r.notified) t += ` • ${faNum(r.notified)} پیام اطلاع‌رسانی`;
+              toast(t, 'ok', 6500);
+            }
+            m.close();
+            navigate('reports');
+          } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+          return;
+        }
+        if (act === 'save') {
+          b.disabled = true;
+          try {
+            await saveCfg();
+            state.autoCharge = await api('/autocharge');
+            haptic('success');
+            toast('تنظیمات صدور خودکار ذخیره شد', 'ok');
+            m.close();
+            navigate('reports');
+          } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+        }
+      }));
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Views — Resident (self-service)
 // ---------------------------------------------------------------------------
 async function viewMy() {
@@ -3250,7 +3399,13 @@ function managerGuideCards() {
         <li>رمز عبور حداقل ۶ کاراکتر و ترجیحاً شامل حرف و عدد باشد.</li>
       </ul>`),
     guideCard('info', 'ساکنین چه چیزی می‌بینند؟', `
-      <p>ساکن فقط این‌ها را می‌بیند: <b>وضعیت من</b> (مانده بدهی، شماره کارت شما، اقلام باز)، <b>گزارش سالانه واحد خودش</b>، <b>تاریخچه</b>، <b>عملکرد مدیر</b> (کارها، هزینه‌ها، مانده صندوق و مدارک)، <b>نظرسنجی‌ها</b> و صورت‌حساب PDF واحد خودش. هیچ دسترسی‌ای به واحدهای دیگر یا ثبت و ویرایش اطلاعات ندارد.</p>`)
+      <p>ساکن فقط این‌ها را می‌بیند: <b>وضعیت من</b> (مانده بدهی، شماره کارت شما، اقلام باز)، <b>گزارش سالانه واحد خودش</b>، <b>تاریخچه</b>، <b>عملکرد مدیر</b> (کارها، هزینه‌ها، مانده صندوق و مدارک)، <b>نظرسنجی‌ها</b> و صورت‌حساب PDF واحد خودش. هیچ دسترسی‌ای به واحدهای دیگر یا ثبت و ویرایش اطلاعات ندارد و راهنمای همین تب‌ها را هم نمی‌بیند.</p>`),
+    guideCard('card', 'صدور خودکار شارژ و گزارش سریع‌تر (جدید)', `
+      <ul>
+        <li><b>صدور خودکار شارژ ماهانه</b> — در تب «گزارش‌ها» ← بخش «یادآوری و اعلان» ← ردیف «صدور خودکار شارژ ماهانه» ← تنظیم. خاموش/روشن کنید، روز ماه (شمسی)، روش محاسبه (ثابت/متراژ/نفرات) و مبلغ پایه را بدهید و <b>واحدها را تیک بزنید</b>. از آن روز به بعد، اول ماه برای واحدهای تیک‌خورده قلم شارژ صادر می‌شود، اعتبار اضافه‌پرداخت مثل صدور دستی اعمال می‌شود و ساکن متصل هر واحد پیام تلگرام می‌گیرد. در هر ماه فقط یک‌بار صادر می‌شود و اقلام تکراری رد می‌شوند؛ دکمهٔ «صدور همین حالا» هم برای اجرای فوری هست.</li>
+        <li><b>مانده بدهی زیر وضعیت در تب شارژ</b> — مثل تب واحدها، زیر وضعیت هر قلم و هر رسید پرداخت، اگر واحد هنوز بدهی کلی داشته باشد «مانده بدهی واحد» با رنگ قرمز نوشته می‌شود؛ واحدِ تسویه هیچ نوشتهٔ اضافه‌ای ندارد.</li>
+      </ul>
+      <div class="hint">یادآوری‌های دوره‌ای که «مدیریت اپ» برای شما می‌سازد هم به‌صورت پیام تلگرام می‌رسد (مثلاً یادآوری تسویه ماهانه) — این تنظیم دست شما نیست و از پنل مدیریت اپ کنترل می‌شود.</div>`)
   ].join('');
 }
 
@@ -3543,6 +3698,7 @@ const actions = {
   },
   'remind': () => doReminders(),
   'autoremind': () => openAutoRemindModal(),
+  'autocharge': () => openAutoChargeModal(),
   'announce': () => openAnnounceModal(),
   'poll-new': () => openPollForm(),
   'poll-vote': el => pollVote(Number(el.dataset.poll), Number(el.dataset.opt)),

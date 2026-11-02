@@ -5,7 +5,7 @@ import { currentPeriod, periodLabel, isPeriod, addPeriods, tehranDayStartSec, to
 import { buildZip } from './lib/zip.js';
 
 const KEY = 'bc_mock_db_v6';
-const SCHEMA_V = 11; // ← با هر تغییر شکل داده‌ی دمو یک واحد اضافه شود (v11: admin_notifications)
+const SCHEMA_V = 12; // ← با هر تغییر شکل داده‌ی دمو یک واحد اضافه شود (v12: auto_charge + manager_reminders)
 
 function seed() {
   const period = currentPeriod();
@@ -17,14 +17,14 @@ function seed() {
     { id: 4, username: 'unit1', password: '1234', role: 'resident', full_name: 'علی رضایی', phone: '09121110001', unit_id: 1, is_active: true, telegram_linked: false, telegram_username: 'ali_rezaei' }
   ];
   const units = [
-    { id: 1, number: '1', resident_name: 'علی رضایی', phone: '09121110001', area_m2: 85, residents_count: 2, note: '' },
-    { id: 2, number: '2', resident_name: 'مریم احمدی', phone: '09121110002', area_m2: 110, residents_count: 3, note: '' },
-    { id: 3, number: '3', resident_name: 'حسین محمدی', phone: '09121110003', area_m2: 95, residents_count: 2, note: '' },
-    { id: 4, number: '4', resident_name: 'زهرا موسوی', phone: '09121110004', area_m2: 120, residents_count: 4, note: '' },
-    { id: 5, number: '5', resident_name: 'رضا محمدی', phone: '09121110005', area_m2: 75, residents_count: 1, note: '' },
-    { id: 6, number: '6', resident_name: 'سارا حسینی', phone: '09121110006', area_m2: 130, residents_count: 3, note: '' },
-    { id: 7, number: '7', resident_name: 'امیر نادری', phone: '09121110007', area_m2: 100, residents_count: 2, note: '' },
-    { id: 8, number: '8', resident_name: 'نرگس صادقی', phone: '09121110008', area_m2: 105, residents_count: 3, note: '' }
+    { id: 1, number: '1', resident_name: 'علی رضایی', phone: '09121110001', area_m2: 85, residents_count: 2, note: '', auto_charge: false },
+    { id: 2, number: '2', resident_name: 'مریم احمدی', phone: '09121110002', area_m2: 110, residents_count: 3, note: '', auto_charge: true },
+    { id: 3, number: '3', resident_name: 'حسین محمدی', phone: '09121110003', area_m2: 95, residents_count: 2, note: '', auto_charge: false },
+    { id: 4, number: '4', resident_name: 'زهرا موسوی', phone: '09121110004', area_m2: 120, residents_count: 4, note: '', auto_charge: true },
+    { id: 5, number: '5', resident_name: 'رضا محمدی', phone: '09121110005', area_m2: 75, residents_count: 1, note: '', auto_charge: false },
+    { id: 6, number: '6', resident_name: 'سارا حسینی', phone: '09121110006', area_m2: 130, residents_count: 3, note: '', auto_charge: true },
+    { id: 7, number: '7', resident_name: 'امیر نادری', phone: '09121110007', area_m2: 100, residents_count: 2, note: '', auto_charge: false },
+    { id: 8, number: '8', resident_name: 'نرگس صادقی', phone: '09121110008', area_m2: 105, residents_count: 3, note: '', auto_charge: false }
   ];
   let debtId = 1;
   const debts = [];
@@ -116,7 +116,7 @@ function seed() {
   ];
   return {
     v: SCHEMA_V,
-    seq: { users: 5, units: 9, debts: debtId, expenses: 3, polls: 2, poll_votes: 3, visits: 6, bot_messages: 12, tasks: 5, task_files: 1, task_file_chunks: 1, claims: 3, claim_files: 3, claim_file_chunks: 3, invites: 1, credits: 4, admin_notifications: 3 },
+    seq: { users: 5, units: 9, debts: debtId, expenses: 3, polls: 2, poll_votes: 3, visits: 6, bot_messages: 12, tasks: 5, task_files: 1, task_file_chunks: 1, claims: 3, claim_files: 3, claim_file_chunks: 3, invites: 1, credits: 4, admin_notifications: 3, manager_reminders: 2 },
     building_name: 'برج نگین (دمو)',
     settings: {
       address: 'اصفهان، خیابان سعادت‌آباد، پلاک ۱۲',
@@ -171,6 +171,10 @@ function seed() {
     task_file_chunks: [],
     payment_claims: claims, claim_files, claim_file_chunks,
     unit_credits,
+    // v2.23.0 — یادآوری‌های دوره‌ای مدیر ساختمان (دمو): یک نمونهٔ ماهانه
+    manager_reminders: [
+      { id: 1, title: 'تسویه صندوق ماه و ثبت هزینه‌ها', text: 'لطفاً تا روز ۵ ماه جدید هزینه‌های مشترک را ثبت و صندوق را تسویه کنید.', freq: 'monthly', weekday: 6, month_day: 3, is_active: 1, last_sent_at: null, last_sent_day: '', last_sent_period: '', created_at: Math.floor(Date.now() / 1000) - 86400 }
+    ],
     // v2.22.0 — گزارش اعلان‌های فعالیت مدیرکل (دمو): چند ردیف نمونه
     admin_notifications: [
       { id: 1, event: 'resident_login', title: 'ساکن وارد اپ شد (نام کاربری/تلگرام)', text: '🔔 ساختمان نمونه\nساکن وارد اپ شد (نام کاربری/تلگرام)\n\n• روش ورود: داخل تلگرام\n\nانجام‌دهنده: رضا محمدی (@reza_m) — ساکن', actor_user_id: 3, actor_username: 'unit5', actor_role: 'resident', unit_id: 5, unit_number: '5', ref_id: null, meta: '', sent: 1, send_error: '', created_at: Math.floor(Date.now() / 1000) - 5400 },
@@ -197,9 +201,10 @@ function load() {
         && Array.isArray(db.payment_claims) && Array.isArray(db.claim_files) && Array.isArray(db.claim_file_chunks)
         && Array.isArray(db.unit_credits || [])
         && Array.isArray(db.admin_notifications || [])
+        && Array.isArray(db.manager_reminders || [])
         && Array.isArray(db.invites || [])
         && db.settings && typeof db.building_name === 'string';
-      if (okShape) { db.invites = db.invites || []; db.unit_credits = db.unit_credits || []; db.admin_notifications = db.admin_notifications || []; return db; }
+      if (okShape) { db.invites = db.invites || []; db.unit_credits = db.unit_credits || []; db.admin_notifications = db.admin_notifications || []; db.manager_reminders = db.manager_reminders || []; (db.units || []).forEach(u => { u.auto_charge = Boolean(u.auto_charge); }); return db; }
     }
   } catch { /* ignore */ }
   const db = seed();
@@ -390,8 +395,8 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     save(db);
     return ok({ token: 'mock-token-' + u.id, linked: true, bound: true, user: pub(u) });
   }
-  if (path === '/install-status') return ok({ installed: true, version: '2.22.0' });
-  if (path === '/health') return ok({ ok: true, version: '2.22.0' });
+  if (path === '/install-status') return ok({ installed: true, version: '2.23.0' });
+  if (path === '/health') return ok({ ok: true, version: '2.23.0' });
 
   // ---------- auth guard ----------
   const guard = () => (!me ? err('ابتدا وارد شوید', 401) : null);
@@ -493,7 +498,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     if (type === 'backup') {
       // full-fidelity JSON backup — same shape as the server (v2.11.0)
       const payload = {
-        app: 'building-charges', version: '2.22.0',
+        app: 'building-charges', version: '2.23.0',
         exported_at: new Date().toISOString(),
         units: db.units, debts: db.debts, expenses: db.expenses,
         users: db.users, polls: db.polls, poll_votes: db.poll_votes,
@@ -1252,12 +1257,18 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
       .slice(0, isMgr ? 200 : 50);
     const claimsOut = rows.map(x => {
       const u = db.units.find(un => un.id === x.unit_id) || {};
-      return {
+      // v2.23.0 — ماندهٔ کل بدهی واحد (فقط برای مدیر/ادمین — نمایش زیر «تأیید شد»)
+      const remaining = db.debts
+        .filter(d => d.unit_id === x.unit_id)
+        .reduce((sum, d) => sum + Math.max(0, (d.amount || 0) - (d.paid_amount || 0)), 0);
+      const out = {
         ...x,
         unit_number: u.number || '',
         unit_resident: u.resident_name || '',
         files: db.claim_files.filter(f => f.claim_id === x.id)
       };
+      if (isMgr) out.unit_remaining = remaining;
+      return out;
     });
     return ok({ claims: claimsOut });
   }
@@ -1572,6 +1583,149 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     const TEHRAN = 12600; // UTC+3:30
     return Math.floor(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 1000) - TEHRAN;
   };
+  // ---------- v2.23.0 — صدور خودکار شارژ (آینهٔ manager.js /autocharge) ----------
+  function acCfgOf(d) {
+    let cfg = {};
+    try { cfg = JSON.parse((d.settings || {}).auto_charge_cfg || '{}') || {}; } catch { /* fresh */ }
+    return {
+      enabled: cfg.enabled === '1',
+      day: Math.min(28, Math.max(1, Math.round(Number(cfg.day) || 1))),
+      amount: Math.max(0, Math.round(Number(cfg.amount) || 0)),
+      mode: ['fixed', 'area', 'person'].includes(cfg.mode) ? cfg.mode : 'fixed',
+      lastPeriod: (d.settings || {}).auto_charge_last || ''
+    };
+  }
+  if (path === '/autocharge' && method === 'GET') {
+    const g = roleGuard('manager'); if (g) return g;
+    const cfg = acCfgOf(db);
+    return ok({
+      cfg: { enabled: cfg.enabled, day: cfg.day, amount: cfg.amount, mode: cfg.mode },
+      last_period: cfg.lastPeriod,
+      units: db.units.map(u => ({ id: u.id, number: u.number, resident_name: u.resident_name || '', area_m2: u.area_m2, residents_count: u.residents_count, auto_charge: Boolean(u.auto_charge) })),
+      ticked: db.units.filter(u => u.auto_charge).length,
+      bot_configured: Boolean((db.settings || {}).bot_token)
+    });
+  }
+  if (path === '/autocharge' && method === 'PUT') {
+    const g = roleGuard('manager'); if (g) return g;
+    const cur = acCfgOf(db);
+    const cfg = {
+      enabled: body.enabled === undefined ? cur.enabled : Boolean(body.enabled),
+      day: body.day === undefined ? cur.day : Math.min(28, Math.max(1, Math.round(Number(body.day) || 1))),
+      amount: body.amount === undefined ? cur.amount : Math.max(0, Math.round(Number(body.amount) || 0)),
+      mode: ['fixed', 'area', 'person'].includes(body.mode) ? body.mode : cur.mode
+    };
+    if (cfg.enabled && cfg.amount <= 0) return err('برای صدور خودکار، مبلغ باید بزرگ‌تر از صفر باشد');
+    db.settings = db.settings || {};
+    db.settings.auto_charge_cfg = JSON.stringify({ enabled: cfg.enabled ? '1' : '0', day: cfg.day, amount: cfg.amount, mode: cfg.mode });
+    save(db);
+    return ok({ ok: true, cfg });
+  }
+  if (path === '/autocharge/unit' && method === 'PUT') {
+    const g = roleGuard('manager'); if (g) return g;
+    const u = db.units.find(x => x.id === Number((body || {}).unit_id));
+    if (!u) return err('واحد پیدا نشد', 404);
+    u.auto_charge = Boolean((body || {}).on);
+    save(db);
+    return ok({ ok: true, unit_id: u.id, on: u.auto_charge, ticked: db.units.filter(x => x.auto_charge).length });
+  }
+  if (path === '/autocharge/run' && method === 'POST') {
+    const g = roleGuard('manager'); if (g) return g;
+    const cfg = acCfgOf(db);
+    const period = currentPeriod();
+    const existing = new Set(db.debts.filter(d => d.period === period && d.kind === 'monthly').map(d => d.unit_id));
+    const targets = db.units.filter(u => u.auto_charge && !existing.has(u.id));
+    let created = 0, creditUsed = 0;
+    const desc = 'شارژ ماه ' + periodLabel(period);
+    for (const u of targets) {
+      let amt = 0;
+      if (cfg.mode === 'fixed') amt = cfg.amount;
+      else if (cfg.mode === 'person') amt = Math.round(cfg.amount * (u.residents_count || 1));
+      else if (cfg.mode === 'area') {
+        if (!u.area_m2) continue;
+        amt = Math.round(cfg.amount * u.area_m2);
+      }
+      if (amt > 0) {
+        db.debts.push({ id: db.seq.debts++, unit_id: u.id, kind: 'monthly', expense_id: null, period, description: desc, amount: amt, paid_amount: 0, status: 'unpaid', paid_at: null, method: '', note: '', created_at: Math.floor(Date.now() / 1000) });
+        created++;
+      }
+    }
+    db.settings = db.settings || {};
+    db.settings.auto_charge_last = period;
+    if (notifCfgOf(db).charge_generate && me && me.role !== 'admin') {
+      demoNotify('charge_generate', 'صدور شارژ ماه', '🔔 ' + ((db.settings || {}).building_name || 'ساختمان') + '\nصدور شارژ ماه\n\n• صدور خودکار — ماه ' + periodLabel(period) + ': ' + created + ' قلم تازه\n\nانجام‌دهنده: سیستم (خودکار)', null, null, '', null);
+    }
+    save(db);
+    return ok({ result: { ran: true, period, created, skipped: db.units.filter(u => u.auto_charge).length - targets.length, no_area: [], notified: created, notify_failed: 0, credit_used_total: creditUsed, credit_units: 0 } });
+  }
+
+  // ---------- v2.23.0 — یادآوری دوره‌ای مدیر ساختمان (آینهٔ src/mreminders.js) ----------
+  const FREQ_DEMO = ['daily', 'weekly', 'monthly'];
+  const WEEK_DEMO = ['شنبه', 'یک‌شنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
+  const mreFreq = r => r.freq === 'daily' ? 'هر روز' : (r.freq === 'weekly' ? 'هر ' + (WEEK_DEMO[Number(r.weekday) || 0] || 'هفته') : 'ماهانه — روز ' + (r.month_day || 1) + ' شمسی');
+  if (path === '/a/mreminders' && method === 'GET') {
+    const g = roleGuard('admin'); if (g) return g;
+    return ok({
+      items: db.manager_reminders.slice().sort((a, b) => b.id - a.id).map(r => ({ ...r, freq_label: mreFreq(r) })),
+      manager_count: db.users.filter(u => u.role === 'manager' && u.is_active).length,
+      reachable: db.users.filter(u => u.role === 'manager' && u.is_active && u.telegram_linked).length,
+      today: {}
+    });
+  }
+  if (path === '/a/mreminders' && method === 'POST') {
+    const g = roleGuard('admin'); if (g) return g;
+    const title = String((body || {}).title || '').trim().slice(0, 120);
+    if (!title) return err('عنوان یادآوری را وارد کنید');
+    const freq = FREQ_DEMO.includes((body || {}).freq) ? body.freq : 'monthly';
+    const item = {
+      id: db.seq.manager_reminders++, title, text: String((body || {}).text || '').trim().slice(0, 800), freq,
+      weekday: freq === 'weekly' ? Math.min(6, Math.max(0, Math.round(Number((body || {}).weekday) || 0))) : null,
+      month_day: freq === 'monthly' ? Math.min(28, Math.max(1, Math.round(Number((body || {}).month_day) || 1))) : null,
+      is_active: 1, last_sent_at: null, last_sent_day: '', last_sent_period: '',
+      created_at: Math.floor(Date.now() / 1000)
+    };
+    db.manager_reminders.push(item);
+    save(db);
+    return ok({ ok: true, item: { ...item, freq_label: mreFreq(item) } }, 201);
+  }
+  if (path.startsWith('/a/mreminders/') && method === 'PUT') {
+    const g = roleGuard('admin'); if (g) return g;
+    const id = Number(path.split('/')[3]);
+    const r = db.manager_reminders.find(x => x.id === id);
+    if (!r) return err('یادآوری پیدا نشد', 404);
+    const b = body || {};
+    if (b.title !== undefined) { const t = String(b.title).trim().slice(0, 120); if (!t) return err('عنوان یادآوری را وارد کنید'); r.title = t; }
+    if (b.text !== undefined) r.text = String(b.text).trim().slice(0, 800);
+    if (b.freq !== undefined && FREQ_DEMO.includes(b.freq)) {
+      if (b.freq !== r.freq) { r.last_sent_day = ''; r.last_sent_period = ''; }
+      r.freq = b.freq;
+    }
+    if (b.weekday !== undefined) r.weekday = Math.min(6, Math.max(0, Math.round(Number(b.weekday) || 0)));
+    if (b.month_day !== undefined) r.month_day = Math.min(28, Math.max(1, Math.round(Number(b.month_day) || 1)));
+    if (r.freq === 'monthly') r.weekday = null;
+    else if (r.freq === 'daily') { r.weekday = null; r.month_day = null; }
+    if (b.is_active !== undefined) r.is_active = b.is_active ? 1 : 0;
+    save(db);
+    return ok({ ok: true, item: { ...r, freq_label: mreFreq(r) } });
+  }
+  if (path.startsWith('/a/mreminders/') && path.endsWith('/send') && method === 'POST') {
+    const g = roleGuard('admin'); if (g) return g;
+    const id = Number(path.split('/')[3]);
+    const r = db.manager_reminders.find(x => x.id === id);
+    if (!r) return err('یادآوری پیدا نشد', 404);
+    const mgrs = db.users.filter(u => u.role === 'manager' && u.is_active && u.telegram_linked);
+    return ok({ ok: true, ran: true, sent: (db.settings || {}).bot_token ? mgrs.length : 0, failed: 0, due: 1, unreachable: mgrs.length === 0 ? 1 : 0 });
+  }
+  if (path.startsWith('/a/mreminders/') && method === 'DELETE') {
+    const g = roleGuard('admin'); if (g) return g;
+    const id = Number(path.split('/')[3]);
+    const i = db.manager_reminders.findIndex(x => x.id === id);
+    if (i < 0) return err('یادآوری پیدا نشد', 404);
+    db.manager_reminders.splice(i, 1);
+    save(db);
+    return ok({ ok: true });
+  }
+
   // ---------- v2.22.0 — اعلان فعالیت‌ها (آینهٔ src/actnotifs.js) ----------
   function notifEventsDemo() { return [
     { key: 'resident_open', group: 'presence', label: 'ساکن اپ را باز کرد', legacy: 'visit_notify_enabled', def: '1' },
@@ -1891,7 +2045,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     };
     return ok({
       installed: true, building_name: db.building_name,
-      app_url: location.origin, version: '2.22.0', counts,
+      app_url: location.origin, version: '2.23.0', counts,
       visits: mockVisitStats(),
       bot: { configured: Boolean(db.bot), connected: Boolean(db.bot && db.bot.connected), username: db.bot ? db.bot.username : null },
       installed_at: Math.floor(Date.now() / 1000)

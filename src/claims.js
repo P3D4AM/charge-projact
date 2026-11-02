@@ -263,15 +263,18 @@ route('GET', '/claims', async (c) => {
 
   let rows;
   if (role === 'manager' || role === 'admin') {
+    // v2.23.0 — ماندهٔ کل بدهی واحد هر رسید (نمایش زیر «تأیید شد» در تب شارژ)
     rows = okStatus
       ? (await c.env.DB.prepare(
-          `SELECT pc.*, u.number AS unit_number, u.resident_name AS unit_resident
+          `SELECT pc.*, u.number AS unit_number, u.resident_name AS unit_resident,
+             COALESCE((SELECT SUM(d.amount - d.paid_amount) FROM debts d WHERE d.unit_id = pc.unit_id), 0) AS unit_remaining
            FROM payment_claims pc JOIN units u ON u.id = pc.unit_id
            WHERE pc.status = ?
            ORDER BY pc.created_at DESC, pc.id DESC LIMIT 200`
         ).bind(okStatus).all()).results || []
       : (await c.env.DB.prepare(
-          `SELECT pc.*, u.number AS unit_number, u.resident_name AS unit_resident
+          `SELECT pc.*, u.number AS unit_number, u.resident_name AS unit_resident,
+             COALESCE((SELECT SUM(d.amount - d.paid_amount) FROM debts d WHERE d.unit_id = pc.unit_id), 0) AS unit_remaining
            FROM payment_claims pc JOIN units u ON u.id = pc.unit_id
            ORDER BY pc.created_at DESC, pc.id DESC LIMIT 200`
         ).all()).results || [];

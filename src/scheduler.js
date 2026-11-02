@@ -11,6 +11,7 @@ import {
 } from './jalali.js';
 import { getBotToken, sendTelegramMessage } from './telegram.js';
 import { logOutgoingBotMessage } from './botmessages.js';
+import { autoConsumeCredit } from './credits.js';
 
 // Free Workers plan allows ~50 subrequests per invocation — each reminder is
 // one Telegram call, so keep a safe cap (same idea as NOTIFY_CAP in manager.js).
@@ -287,6 +288,172 @@ export async function runAutoReminder(env, opts = {}) {
     await setSetting(env, 'auto_reminder_rounds', JSON.stringify({ p: period, r: doneRounds }));
     if (doneRounds.length >= cfg.rounds.length) await setSetting(env, 'auto_reminder_last', period);
   }
+  out.ran = true;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// v2.23.0 — صدور خودکار شارژ ماهانه (ف۱)
+//   تنظیمات (تب گزارش‌ها ← کارت «صدور خودکار شارژ» در پنل مدیر ساختمان):
+//     settings کلید auto_charge_cfg = JSON {enabled, day, amount, mode}
+//     + تیک per-unit: ستون units.auto_charge (migrations/v13)
+//   cron روزانه: از روز تنظیم‌شدهٔ ماه شمسی، برای واحدهای تیک‌خورده که هنوز
+//   قلم «شارژ ماهانه» این ماه را ندارند قلم صادر می‌شود (مثل صدور دستی:
+//   fixed/area/person) → مصرف خودکار اعتبار → اطلاع‌رسانی به ساکن متصل هر واحد
+//   («مرحله اطلاع‌رسانی») → خلاصه برای مدیران → مُهر ماه در settings تا تکرار نشود.
+// ---------------------------------------------------------------------------
+export function readAutoChargeCfg(s = {}) {
+  let cfg = {};
+  try { cfg = JSON.parse(s.auto_charge_cfg || '{}') || {}; } catch { /* corrupt → defaults */ }
+  return {
+    enabled: cfg.enabled === '1',
+    day: Math.min(28, Math.max(1, Math.round(Number(cfg.day) || 1))),
+    amount: Math.max(0, Math.round(Number(cfg.amount) || 0)),
+    mode: ['fixed', 'area', 'person'].includes(cfg.mode) ? cfg.mode : 'fixed',
+    lastPeriod: s.auto_charge_last || ''
+  };
+}
+
+/** حساب‌های متصلِ تلگرام یک واحد برای اطلاع‌رسانی (اولویت: ساکن، بعد مدیرِ ساکن) */
+async function unitNotifyTargets(env, unitId) {
+  const { results } = await env.DB.prepare(`
+    SELECT acc.id, acc.role, acc.telegram_user_id, acc.full_name
+    FROM users acc
+    WHERE acc.unit_id = ? AND acc.is_active = 1 AND acc.telegram_user_id IS NOT NULL
+      AND (acc.role = 'resident' OR (acc.role = 'manager' AND COALESCE(acc.is_resident, 1) = 1))
+    ORDER BY CASE acc.role WHEN 'resident' THEN 0 ELSE 1 END
+  `).bind(unitId).all();
+  return results || [];
+}
+
+export async function runAutoCharge(env, opts = {}) {
+  const out = {
+    ran: false, reason: '', period: '',
+    created: 0, skipped: 0, no_area: [], notified: 0, notify_failed: 0,
+    credit_used_total: 0, credit_units: 0, demo: Boolean(opts.demo)
+  };
+
+  const { period, jd } = currentJalaliPeriod();
+  out.period = period;
+
+  const s = await getSettings(env);
+  const cfg = readAutoChargeCfg(s);
+  if (!opts.force) {
+    if (!cfg.enabled) { out.reason = 'disabled'; return out; }
+    if (cfg.amount <= 0) { out.reason = 'no_amount'; return out; }
+    if (jd < cfg.day) { out.reason = 'day_not_reached'; return out; }
+    if (cfg.lastPeriod === period) { out.reason = 'already_done'; return out; }
+  }
+
+  // فقط واحدهای تیک‌خورده (ستون ممکن است روی دیتابیس خیلی قدیمی نباشد)
+  let units = [];
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT * FROM units WHERE auto_charge = 1 ORDER BY id'
+    ).all();
+    units = results || [];
+  } catch { out.reason = 'column_missing'; return out; }
+  if (!units.length) { out.reason = 'no_units'; return out; }
+
+  const { results: existing } = await env.DB.prepare(
+    "SELECT unit_id FROM debts WHERE period = ? AND kind = 'monthly'"
+  ).bind(period).all();
+  const existingSet = new Set((existing || []).map(r => r.unit_id));
+  const targets = units.filter(u => !existingSet.has(u.id));
+  out.skipped = units.length - targets.length;
+
+  const desc = 'شارژ ماه ' + periodLabel(period);
+  const stmts = [];
+  for (const u of targets) {
+    let amt = 0;
+    if (cfg.mode === 'fixed') amt = cfg.amount;
+    else if (cfg.mode === 'person') amt = Math.round(cfg.amount * (u.residents_count || 1));
+    else if (cfg.mode === 'area') {
+      if (!u.area_m2) { out.no_area.push(u.number); continue; }
+      amt = Math.round(cfg.amount * u.area_m2);
+    }
+    if (amt > 0) {
+      stmts.push(env.DB.prepare(`
+        INSERT INTO debts (unit_id, kind, period, description, amount, created_at)
+        VALUES (?, 'monthly', ?, ?, ?, ?)
+      `).bind(u.id, period, desc, amt, Math.floor(Date.now() / 1000)));
+    }
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  out.created = stmts.length;
+
+  // مصرف خودکار اعتبار — دقیقاً مثل صدور دستی (تلهٔ concurrency: ترتیبی)
+  const botToken = opts.botToken ?? (opts.demo ? 'demo' : await getBotToken(env));
+  const appUrl = s.app_url || opts.origin || '';
+  const keyboard = appUrl && !opts.demo
+    ? { inline_keyboard: [[{ text: '🏢 باز کردن اپ ساختمان', web_app: { url: appUrl } }]] }
+    : undefined;
+  const send = opts.sender || ((chatId, text, kb) => sendTelegramMessage(botToken, chatId, text, kb));
+  const building = s.building_name || 'ساختمان';
+
+  for (const u of targets) {
+    const { used } = await autoConsumeCredit(env, u.id, { period });
+    if (used > 0) { out.credit_used_total += used; out.credit_units++; }
+    const debtRow = await env.DB.prepare(
+      "SELECT amount, paid_amount FROM debts WHERE unit_id = ? AND period = ? AND kind = 'monthly' LIMIT 1"
+    ).bind(u.id, period).first();
+    if (!debtRow) continue;
+    const remaining = Math.max(0, Number(debtRow.amount) - Number(debtRow.paid_amount));
+    // مرحلهٔ اطلاع‌رسانی: پیام خصوصی به ساکن متصل واحد (اولویت ساکن، بعد مدیرِ ساکن)
+    const accs = await unitNotifyTargets(env, u.id);
+    const text = `${building} — واحد ${faNum(unitNo(u.number))}\n` +
+      `شارژ ${periodLabel(period)} صادر شد\n` +
+      `• مبلغ: ${faNum(Number(debtRow.amount).toLocaleString('en-US'))} تومان\n` +
+      (used > 0 ? `• از اعتبار اضافه‌پرداخت شما: ${faNum(used.toLocaleString('en-US'))} تومان اعمال شد\n` : '') +
+      (remaining > 0
+        ? `• مانده برای پرداخت: ${faNum(remaining.toLocaleString('en-US'))} تومان\nپس از پرداخت، فیش را در «واحد من» بارگذاری کنید.`
+        : 'بدهی این ماه شما با اعتبار تسویه شد. دستتان درد نکند!');
+    for (const acc of accs.slice(0, 1)) { // مثل یادآوری: هر واحد فقط یک پیام (اولویت ساکن، بعد مدیرِ ساکن)
+      if (opts.demo) { out.notified++; continue; }
+      try {
+        const rr = await send(acc.telegram_user_id, text, keyboard);
+        if (rr && rr.ok) {
+          out.notified++;
+          try { await logOutgoingBotMessage(env, { chatId: acc.telegram_user_id, text, title: 'صدور خودکار شارژ' }); } catch { /* report only */ }
+        } else out.notify_failed++;
+      } catch { out.notify_failed++; }
+    }
+  }
+
+  // خلاصه برای مدیران ساختمان
+  if (!opts.demo) {
+    const summary =
+      '🤖 صدور خودکار شارژ انجام شد\n' +
+      `ماه: ${periodLabel(period)}\n` +
+      `• قلم تازه: ${faNum(out.created)} واحد\n` +
+      (out.skipped ? `• قبلاً صادرشده (ردشده): ${faNum(out.skipped)}\n` : '') +
+      (out.credit_used_total > 0 ? `• اعتبار اعمال‌شده: ${faNum(out.credit_used_total.toLocaleString('en-US'))} تومان\n` : '') +
+      `• اطلاع‌رسانی موفق: ${faNum(out.notified)} پیام` + (out.notify_failed ? ` — ناموفق: ${faNum(out.notify_failed)}` : '');
+    const { results: mgrs } = await env.DB.prepare(`
+      SELECT telegram_user_id FROM users
+      WHERE role = 'manager' AND is_active = 1 AND telegram_user_id IS NOT NULL
+    `).all();
+    for (const m of mgrs || []) {
+      try {
+        const rr = await send(m.telegram_user_id, summary, undefined);
+        if (rr && rr.ok) await logOutgoingBotMessage(env, { chatId: m.telegram_user_id, text: summary, title: 'صدور خودکار شارژ' });
+      } catch { /* never fail the run */ }
+    }
+    // گزارش اعلان فعالیت برای مدیرکل (v2.22 hooks) — بازیگر: سیستم
+    try {
+      const { notifyActivity } = await import('./actnotifs.js');
+      await notifyActivity(env, null, 'charge_generate', {
+        lines: [
+          `صدور خودکار — ماه ${periodLabel(period)}: ${out.created} قلم تازه` + (out.skipped ? `، ${out.skipped} ردشده` : ''),
+          ...(out.credit_used_total > 0 ? [`اعتبار ${out.credit_used_total.toLocaleString('en-US')} تومان برای ${out.credit_units} واحد اعمال شد`] : []),
+          `اطلاع‌رسانی: ${out.notified} پیام موفق` + (out.notify_failed ? `، ${out.notify_failed} ناموفق` : '')
+        ]
+      });
+    } catch { /* never break the run */ }
+  }
+
+  // مُهر ماه — cron هرگز دو بار در یک ماه صادر نمی‌کند
+  if (!opts.demo) await setSetting(env, 'auto_charge_last', period);
   out.ran = true;
   return out;
 }

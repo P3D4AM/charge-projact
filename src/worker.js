@@ -4,6 +4,8 @@
 import { handleApi } from './api.js';
 import { sendTelegramMessage, getBotToken, getBotInfo } from './telegram.js';
 import { runAutoReminder } from './scheduler.js';
+import { runAutoCharge } from './scheduler.js';
+import { runManagerReminders } from './mreminders.js';
 import { logBotMessage, shouldLogUpdate, logOutgoingBotMessage } from './botmessages.js';
 import { ensureSchema } from './migrate.js';
 
@@ -182,6 +184,21 @@ const worker = {
       else console.log(`[auto-reminder] ${r.period}: sent=${r.sent} failed=${r.failed} unreachable=${r.unreachable} of ${r.targets}`);
     } catch (e) {
       console.error('[auto-reminder] failed:', (e && e.message) || e);
+    }
+    // v2.23.0 — صدور خودکار شارژ ماهانه (تیک واحدها) + یادآوری‌های دوره‌ای مدیر ساختمان
+    try {
+      const ac = await runAutoCharge(env, {});
+      if (!ac.ran) console.log(`[auto-charge] skipped (${ac.reason}) for ${ac.period}`);
+      else console.log(`[auto-charge] ${ac.period}: created=${ac.created} skipped=${ac.skipped} notified=${ac.notified}`);
+    } catch (e) {
+      console.error('[auto-charge] failed:', (e && e.message) || e);
+    }
+    try {
+      const mr = await runManagerReminders(env, {});
+      if (!mr.ran) console.log(`[manager-reminders] skipped (${mr.reason})`);
+      else console.log(`[manager-reminders]: due=${mr.due} sent=${mr.sent} failed=${mr.failed}`);
+    } catch (e) {
+      console.error('[manager-reminders] failed:', (e && e.message) || e);
     }
   },
 

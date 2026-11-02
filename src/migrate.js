@@ -97,6 +97,22 @@ export function ensureSchema(env) {
       send_error       TEXT DEFAULT '',
       created_at       INTEGER NOT NULL
     )`);
+    // v13-autocharge-mreminders.sql (v2.23.0) — تیک شارژ خودکار واحدها
+    await ensure(env, 'units', 'auto_charge', 'ALTER TABLE units ADD COLUMN auto_charge INTEGER NOT NULL DEFAULT 0');
+    // v13 (v2.23.0) — یادآوری‌های دوره‌ای مدیر ساختمان (ساخت از پنل ادمین)
+    await ensure(env, 'manager_reminders', 'id', `CREATE TABLE IF NOT EXISTS manager_reminders (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      title             TEXT NOT NULL,
+      text              TEXT DEFAULT '',
+      freq              TEXT NOT NULL DEFAULT 'monthly',
+      weekday           INTEGER,
+      month_day         INTEGER,
+      is_active         INTEGER NOT NULL DEFAULT 1,
+      last_sent_at      INTEGER,
+      last_sent_day     TEXT DEFAULT '',
+      last_sent_period  TEXT DEFAULT '',
+      created_at        INTEGER NOT NULL
+    )`);
   })();
   return env[PROBE];
 }

@@ -14,7 +14,7 @@ import { b64ToBytes, bytesToB64 } from './tasks.js';
 import { buildZip, safeEntryName } from '../public/js/lib/zip.js';
 import {
   runAutoReminder, readAutoCfg, autoRemindStats, rememberAppUrl,
-  renderRemindText, DEFAULT_REMIND_TEXT
+  renderRemindText, DEFAULT_REMIND_TEXT, runAutoCharge, readAutoChargeCfg
 } from './scheduler.js';
 import { registerCredit, unitCredit, unitDebtRemaining, autoConsumeCredit, creditTotal } from './credits.js';
 import { notifyActivity } from './actnotifs.js';
@@ -728,6 +728,64 @@ route('POST', '/notify/announce', async (c) => {
 // runAutoReminder() daily at 09:00 Tehran; these routes let the manager
 // configure, preview, test and fire it manually.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// v2.23.0 — صدور خودکار شارژ ماهانه (فقط مدیر ساختمان)
+// تنظیم: خاموش/روشن + روز ماه (۱-۲۸) + مبلغ و روش (ثابت/متراژ/نفرات) + تیک واحدها.
+// اجرا: cron روزانه (worker scheduled) یا دکمهٔ «اجرای دستی» (force).
+// ---------------------------------------------------------------------------
+route('GET', '/autocharge', async (c) => {
+  const s = await getSettings(c.env);
+  const cfg = readAutoChargeCfg(s);
+  const { results: units } = await c.env.DB.prepare(
+    'SELECT id, number, resident_name, area_m2, residents_count, auto_charge FROM units ORDER BY id'
+  ).all();
+  return json({
+    cfg: { enabled: cfg.enabled, day: cfg.day, amount: cfg.amount, mode: cfg.mode },
+    last_period: cfg.lastPeriod || '',
+    units: (units || []).map(u => ({
+      id: u.id, number: u.number, resident_name: u.resident_name || '',
+      area_m2: u.area_m2, residents_count: u.residents_count,
+      auto_charge: Boolean(u.auto_charge)
+    })),
+    ticked: (units || []).filter(u => u.auto_charge).length,
+    bot_configured: Boolean(await getBotToken(c.env))
+  });
+}, 'manager');
+
+route('PUT', '/autocharge', async (c) => {
+  const b = c.body || {};
+  const s = await getSettings(c.env);
+  const cur = readAutoChargeCfg(s);
+  const cfg = {
+    enabled: b.enabled === undefined ? cur.enabled : Boolean(b.enabled),
+    day: b.day === undefined ? cur.day : Math.min(28, Math.max(1, Math.round(Number(b.day) || 1))),
+    amount: b.amount === undefined ? cur.amount : Math.max(0, Math.round(Number(b.amount) || 0)),
+    mode: ['fixed', 'area', 'person'].includes(b.mode) ? b.mode : cur.mode
+  };
+  if (cfg.enabled && cfg.amount <= 0) return fail('برای صدور خودکار، مبلغ باید بزرگ‌تر از صفر باشد');
+  await setSetting(c.env, 'auto_charge_cfg', JSON.stringify(cfg));
+  return json({ ok: true, cfg });
+}, 'manager');
+
+// تیک/برداشتن تیک یک واحد
+route('PUT', '/autocharge/unit', async (c) => {
+  const b = c.body || {};
+  const unitId = Number(b.unit_id || 0);
+  const row = await c.env.DB.prepare('SELECT id FROM units WHERE id = ?').bind(unitId).first();
+  if (!row) return fail('واحد پیدا نشد', 404);
+  await c.env.DB.prepare('UPDATE units SET auto_charge = ? WHERE id = ?')
+    .bind(b.on ? 1 : 0, unitId).run();
+  const ticked = await c.env.DB.prepare('SELECT COUNT(*) AS c FROM units WHERE auto_charge = 1').first();
+  return json({ ok: true, unit_id: unitId, on: Boolean(b.on), ticked: Number(ticked && ticked.c) || 0 });
+}, 'manager');
+
+// اجرای دستی «همین حالا» — از گیت‌های روز/مُهر عبور می‌کند و ماه جاری را مُهر می‌زند
+route('POST', '/autocharge/run', async (c) => {
+  await rememberAppUrl(c.env, new URL(c.request.url).origin);
+  const result = await runAutoCharge(c.env, { force: true, origin: new URL(c.request.url).origin });
+  return json({ result });
+}, 'manager');
+
 route('GET', '/autoremind', async (c) => {
   const s = await getSettings(c.env);
   const stats = await autoRemindStats(c.env);
