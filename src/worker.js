@@ -212,6 +212,13 @@ const worker = {
         return await handleApi(request, env, ctx);
       }
       if (request.method === 'GET' || request.method === 'HEAD') {
+        // v2.23.1 — کپی قدیمی اپ (public/tgapp، از v2.16 عقب‌مانده و بدون تب‌های جدید)
+        // حذف شد؛ بوکمارک/لینک‌های کهنهٔ /tgapp/* برای همیشه به نسخهٔ زنده در ریشه
+        // هدایت می‌شوند تا هیچ‌وقت پنل یا اپ کهنه باز نشود.
+        if (url.pathname === '/tgapp' || url.pathname.startsWith('/tgapp/')) {
+          const rest = url.pathname.replace(/^\/tgapp/, '') || '/';
+          return Response.redirect(new URL(rest + url.search, url.origin), 301);
+        }
         return await env.ASSETS.fetch(request);
       }
       return new Response('Method Not Allowed', { status: 405 });
