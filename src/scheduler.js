@@ -306,7 +306,11 @@ export function readAutoChargeCfg(s = {}) {
   let cfg = {};
   try { cfg = JSON.parse(s.auto_charge_cfg || '{}') || {}; } catch { /* corrupt → defaults */ }
   return {
-    enabled: cfg.enabled === '1',
+    // v2.23.2 — backend، enabled را به‌صورت Boolean واقعی در JSON ذخیره می‌کرد و
+    // اینجا فقط رشتهٔ '1' پذیرفته می‌شد → نتیجهٔ ذخیره همیشه «غیرفعال» خوانده می‌شد
+    // (کارت در اپ سبز می‌شد ولی بعد از ذخیره دوباره خاموش نمایش داده می‌شد و cron
+    // هم اجرا نمی‌کرد). حالا هر دو شکل (true / 1 / '1') پذیرفته می‌شود.
+    enabled: (cfg.enabled === true || cfg.enabled === 1 || cfg.enabled === '1'),
     day: Math.min(28, Math.max(1, Math.round(Number(cfg.day) || 1))),
     amount: Math.max(0, Math.round(Number(cfg.amount) || 0)),
     mode: ['fixed', 'area', 'person'].includes(cfg.mode) ? cfg.mode : 'fixed',

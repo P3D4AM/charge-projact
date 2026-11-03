@@ -2161,6 +2161,12 @@ const period = currentPeriod();
   assert.equal(bad.s, 400, 'enabled without amount rejected');
   const put = await j(await handleApi(req('/autocharge', { method: 'PUT', body: { enabled: true, day: 3, amount: 500000, mode: 'fixed' }, token: mT }), env));
   assert.equal(put.s, 200); assert.equal(put.d.cfg.enabled, true); assert.equal(put.d.cfg.day, 3);
+  // v2.23.2 — regression: PUT فقط اکوی ورودی‌اش را برمی‌گرداند؛ یک GET تازه باید
+  // همان enabled را از دیتابیس بخواند (باگ قدیمی: خواننده فقط رشتهٔ '1' را
+  // می‌پذیرفت و نتیجهٔ ذخیره همیشه «غیرفعال» خوانده می‌شد)
+  const gBack = await j(await handleApi(req('/autocharge', { token: mT }), env));
+  assert.equal(gBack.d.cfg.enabled, true, 'saved enabled survives a fresh read (v2.23.2)');
+  assert.equal(gBack.d.cfg.day, 3); assert.equal(gBack.d.cfg.amount, 500000);
 
   // تیک واحدها — فقط تیک‌خورده‌ها صادر می‌شوند
   const t1 = await j(await handleApi(req('/autocharge/unit', { method: 'PUT', body: { unit_id: 1, on: true }, token: mT }), env));

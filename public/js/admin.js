@@ -1770,7 +1770,7 @@ BOT_TOKEN=123:ABC npm run deploy:auto</pre>
 // --- panel tutorial (آموزش پنل — v2.10.0) ------------------------------------
 // Full usage tutorial for every tab of this panel. The explanatory note that
 // used to sit at the bottom of the dashboard was moved into section 2 here.
-const PANEL_DOCS_VERSION = '2.23.1';
+const PANEL_DOCS_VERSION = '2.23.2';
 
 function viewTutorial() {
   const parts = [

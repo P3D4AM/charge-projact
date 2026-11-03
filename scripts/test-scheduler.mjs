@@ -7,6 +7,7 @@ import {
   gateAuto, renderRemindText, readAutoCfg, DEFAULT_REMIND_TEXT, REMIND_CAP
 } from '../src/scheduler.js';
 import worker from '../src/worker.js';
+import { readAutoChargeCfg } from '../src/scheduler.js';
 
 let DatabaseSync = null;
 try {
@@ -73,3 +74,18 @@ if (DatabaseSync) {
 check('cap: REMIND_CAP within free-plan subrequest budget', REMIND_CAP > 0 && REMIND_CAP <= 40);
 
 console.log(`test-scheduler: ALL PASSED ✓ (${passed} checks)`);
+
+// ---------------------------------------------------------------------------
+// v2.23.2 — readAutoChargeCfg باید هر سه شکل ذخیرهٔ enabled را بپذیرد
+// (backend حالا true واقعی ذخیره می‌کند؛ داده‌های قدیمی ممکن است '1' باشند)
+// ---------------------------------------------------------------------------
+{
+  const cases = [{ enabled: true }, { enabled: 1 }, { enabled: '1' }];
+  for (const stored of cases) {
+    const cfg = readAutoChargeCfg({ auto_charge_cfg: JSON.stringify(stored) });
+    assert.equal(cfg.enabled, true, `enabled ${JSON.stringify(stored.enabled)} must read ON`);
+  }
+  assert.equal(readAutoChargeCfg({ auto_charge_cfg: JSON.stringify({ enabled: false }) }).enabled, false, 'enabled false must read OFF');
+  assert.equal(readAutoChargeCfg({}).enabled, false, 'fresh config must read OFF');
+  console.log('test-scheduler: readAutoChargeCfg tolerance ✓');
+}

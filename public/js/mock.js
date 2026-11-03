@@ -395,8 +395,8 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     save(db);
     return ok({ token: 'mock-token-' + u.id, linked: true, bound: true, user: pub(u) });
   }
-  if (path === '/install-status') return ok({ installed: true, version: '2.23.1' });
-  if (path === '/health') return ok({ ok: true, version: '2.23.1' });
+  if (path === '/install-status') return ok({ installed: true, version: '2.23.2' });
+  if (path === '/health') return ok({ ok: true, version: '2.23.2' });
 
   // ---------- auth guard ----------
   const guard = () => (!me ? err('ابتدا وارد شوید', 401) : null);
@@ -498,7 +498,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     if (type === 'backup') {
       // full-fidelity JSON backup — same shape as the server (v2.11.0)
       const payload = {
-        app: 'building-charges', version: '2.23.1',
+        app: 'building-charges', version: '2.23.2',
         exported_at: new Date().toISOString(),
         units: db.units, debts: db.debts, expenses: db.expenses,
         users: db.users, polls: db.polls, poll_votes: db.poll_votes,
@@ -1588,7 +1588,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     let cfg = {};
     try { cfg = JSON.parse((d.settings || {}).auto_charge_cfg || '{}') || {}; } catch { /* fresh */ }
     return {
-      enabled: cfg.enabled === '1',
+      enabled: (cfg.enabled === true || cfg.enabled === 1 || cfg.enabled === '1'),
       day: Math.min(28, Math.max(1, Math.round(Number(cfg.day) || 1))),
       amount: Math.max(0, Math.round(Number(cfg.amount) || 0)),
       mode: ['fixed', 'area', 'person'].includes(cfg.mode) ? cfg.mode : 'fixed',
@@ -1617,7 +1617,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     };
     if (cfg.enabled && cfg.amount <= 0) return err('برای صدور خودکار، مبلغ باید بزرگ‌تر از صفر باشد');
     db.settings = db.settings || {};
-    db.settings.auto_charge_cfg = JSON.stringify({ enabled: cfg.enabled ? '1' : '0', day: cfg.day, amount: cfg.amount, mode: cfg.mode });
+    db.settings.auto_charge_cfg = JSON.stringify({ enabled: cfg.enabled, day: cfg.day, amount: cfg.amount, mode: cfg.mode });
     save(db);
     return ok({ ok: true, cfg });
   }
@@ -2045,7 +2045,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     };
     return ok({
       installed: true, building_name: db.building_name,
-      app_url: location.origin, version: '2.23.1', counts,
+      app_url: location.origin, version: '2.23.2', counts,
       visits: mockVisitStats(),
       bot: { configured: Boolean(db.bot), connected: Boolean(db.bot && db.bot.connected), username: db.bot ? db.bot.username : null },
       installed_at: Math.floor(Date.now() / 1000)
