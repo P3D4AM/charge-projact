@@ -228,7 +228,8 @@ const mockInvitePub = (db, i) => ({
   id: i.id, user_id: i.user_id, token: i.token,
   url: 'https://t.me/' + mockBotUsername(db) + '?startapp=' + i.token,
   created_at: i.created_at, expires_at: i.expires_at,
-  used_at: i.used_at || null, used_by_tg: i.used_by_tg || null
+  used_at: i.used_at || null, used_by_tg: i.used_by_tg || null,
+  parallel: Boolean(Number(i.parallel))
 });
 
 export function mockReset() {
@@ -373,8 +374,8 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
       if (username.toLowerCase() !== String(u.username || '').toLowerCase() || u.password !== password) {
         return err('نام کاربری یا رمز عبور این حساب درست نیست', 401, 'invite_bad_credentials');
       }
-      // آزادسازی پروفایل از حساب‌های قبلی (خروج اجباری — انتقال واقعی)
-      for (const o of db.users) {
+      // آزادسازی فقط در «انتقال»؛ لینک موازی (v2.24.0) پروفایل را دست نمی‌زند
+      if (!Number(inv.parallel)) for (const o of db.users) {
         if (o.id !== u.id && (Number(o.telegram_user_id) === MOCK_TG_PROFILE || Number(o.bound_tg) === MOCK_TG_PROFILE)) {
           o.telegram_linked = false;
           o.telegram_user_id = null;
@@ -395,8 +396,8 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     save(db);
     return ok({ token: 'mock-token-' + u.id, linked: true, bound: true, user: pub(u) });
   }
-  if (path === '/install-status') return ok({ installed: true, version: '2.23.2' });
-  if (path === '/health') return ok({ ok: true, version: '2.23.2' });
+  if (path === '/install-status') return ok({ installed: true, version: '2.24.0' });
+  if (path === '/health') return ok({ ok: true, version: '2.24.0' });
 
   // ---------- auth guard ----------
   const guard = () => (!me ? err('ابتدا وارد شوید', 401) : null);
@@ -498,7 +499,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     if (type === 'backup') {
       // full-fidelity JSON backup — same shape as the server (v2.11.0)
       const payload = {
-        app: 'building-charges', version: '2.23.2',
+        app: 'building-charges', version: '2.24.0',
         exported_at: new Date().toISOString(),
         units: db.units, debts: db.debts, expenses: db.expenses,
         users: db.users, polls: db.polls, poll_votes: db.poll_votes,
@@ -788,7 +789,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     const g = roleGuard('manager', 'admin'); if (g) return g;
     const u = db.users.find(x => x.id === num(body.user_id));
     if (!u) return err('کاربر پیدا نشد', 404);
-    if (u.role === 'admin') return err('برای حساب مدیر اپ لینک دعوت ساخته نمی‌شود', 409);
+    if (u.role === 'admin' && me.role !== 'admin') return err('لینک دعوت حساب مدیر اپ فقط توسط مدیر اپ ساخته می‌شود', 409);
     if (!u.is_active) return err('این حساب غیرفعال است؛ اول فعالش کنید', 409);
     const hours = Math.min(720, Math.max(1, Math.round(Number(body.hours) || 24)));
     const t = Math.floor(Date.now() / 1000);
@@ -797,7 +798,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
       id: db.seq.invites++,
       token: Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join(''),
       user_id: u.id, created_by: me.id, created_at: t, expires_at: t + hours * 3600,
-      used_at: null, used_by_tg: null
+      used_at: null, used_by_tg: null, parallel: Boolean(body.parallel)
     };
     db.invites.push(inv);
     save(db);
@@ -2045,7 +2046,7 @@ export async function mockFetch(fullPath, method = 'GET', body = {}) {
     };
     return ok({
       installed: true, building_name: db.building_name,
-      app_url: location.origin, version: '2.23.2', counts,
+      app_url: location.origin, version: '2.24.0', counts,
       visits: mockVisitStats(),
       bot: { configured: Boolean(db.bot), connected: Boolean(db.bot && db.bot.connected), username: db.bot ? db.bot.username : null },
       installed_at: Math.floor(Date.now() / 1000)

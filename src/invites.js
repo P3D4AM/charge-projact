@@ -39,7 +39,8 @@ function publicInvite(i, botUsername) {
     created_at: i.created_at,
     expires_at: i.expires_at,
     used_at: i.used_at || null,
-    used_by_tg: i.used_by_tg || null
+    used_by_tg: i.used_by_tg || null,
+    parallel: Boolean(Number(i.parallel))
   };
 }
 
@@ -77,12 +78,18 @@ route('POST', '/invites', async (c) => {
   const b = c.body || {};
   const user = await loadUser(c.env, b.user_id);
   if (!user) return fail('کاربر پیدا نشد', 404);
-  if (user.role === 'admin') return fail('برای حساب مدیر اپ لینک دعوت ساخته نمی‌شود', 409);
+  // v2.24.0 — مدیر اپ هم می‌تواند برای حساب خودش لینک بسازد (اتصال موازی به
+  // تلگرامش)؛ مدیر ساختمان همچنان اجازهٔ ساخت لینک برای حساب مدیر اپ را ندارد.
+  if (user.role === 'admin' && c.user.role !== 'admin') {
+    return fail('لینک دعوت حساب مدیر اپ فقط توسط مدیر اپ ساخته می‌شود', 409);
+  }
   if (!user.is_active) return fail('این حساب غیرفعال است؛ اول فعالش کنید', 409);
 
   const hours = Math.min(MAX_HOURS, Math.max(MIN_HOURS, Math.round(Number(b.hours) || 24)));
   const token = tokenGen();
   const t = now();
+  // v2.24.0 — اتصال موازی: پروفایل بازکنندهٔ لینک به حساب‌های دیگرش متصل می‌ماند
+  const parallel = Boolean(c.body && c.body.parallel);
 
   // هر حساب در هر لحظه فقط یک لینک فعال داشته باشد — لینک‌های استفاده‌نشدهٔ
   // قبلی همان حساب باطل می‌شوند تا همیشه آخرین لینک معتبر باشد.
@@ -91,9 +98,9 @@ route('POST', '/invites', async (c) => {
   ).bind(user.id).run();
 
   const res = await c.env.DB.prepare(`
-    INSERT INTO invite_tokens (token, user_id, created_by, created_at, expires_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).bind(token, user.id, c.user.id, t, t + hours * 3600).run();
+    INSERT INTO invite_tokens (token, user_id, created_by, created_at, expires_at, parallel)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(token, user.id, c.user.id, t, t + hours * 3600, parallel ? 1 : 0).run();
   const row = await c.env.DB.prepare('SELECT * FROM invite_tokens WHERE id = ?')
     .bind(res.meta.last_row_id).first();
 
@@ -189,19 +196,25 @@ route('POST', '/auth/invite', async (c) => {
     }
     await loginThrottleClear(c.env, unameL);
 
-    // ---- انتقال: آزادسازی پروفایل از حساب‌های قبلی (خروج اجباری) ----
-    // تا دیروز این‌جا ۴۰۳ telegram_profile_taken برمی‌گشت و انتقال مسدود بود؛
-    // لینک دعوت یعنی «مالکیت تلگرامِ حساب به این پروفایل منتقل شود» — پس
-    // پروفایل از هر حساب دیگری که در آن ثبت است آزاد و به حساب هدف منتقل می‌شود.
-    const heldBy = await c.env.DB.prepare(
-      'SELECT id FROM users WHERE id != ? AND (telegram_user_id = ? OR bound_tg_id = ?)'
-    ).bind(user.id, tgId, tgId).all();
-    for (const row of (heldBy.results || [])) {
-      await c.env.DB.prepare(`
-        UPDATE users SET telegram_user_id = NULL, telegram_username = NULL, bound_tg_id = NULL
-        WHERE id = ?
-      `).bind(row.id).run();
-      await bumpTokenEpoch(c.env, row.id);
+    // ---- انتقال یا اتصال موازی ----
+    // حالت پیش‌فرض (انتقال): تا دیروز این‌جا ۴۰۳ telegram_profile_taken
+    // برمی‌گشت و انتقال مسدود بود؛ لینک دعوت یعنی «مالکیت تلگرامِ حساب به این
+    // پروفایل منتقل شود» — پس پروفایل از هر حساب دیگری که در آن ثبت است آزاد
+    // و به حساب هدف منتقل می‌شود.
+    // v2.24.0 — لینک با پرچم parallel (اتصال موازی): پروفایل دست‌نخورده می‌ماند
+    // و همین پروفایل به حساب هدف هم وصل می‌شود؛ نوتیف همهٔ حساب‌ها به یک چت می‌رسد
+    // (سناریوی «مدیر ساختمان + مدیر اپ، هر دو یک نفر»).
+    if (!Number(invite.parallel)) {
+      const heldBy = await c.env.DB.prepare(
+        'SELECT id FROM users WHERE id != ? AND (telegram_user_id = ? OR bound_tg_id = ?)'
+      ).bind(user.id, tgId, tgId).all();
+      for (const row of (heldBy.results || [])) {
+        await c.env.DB.prepare(`
+          UPDATE users SET telegram_user_id = NULL, telegram_username = NULL, bound_tg_id = NULL
+          WHERE id = ?
+        `).bind(row.id).run();
+        await bumpTokenEpoch(c.env, row.id);
+      }
     }
   }
 
@@ -225,6 +238,7 @@ route('POST', '/auth/invite', async (c) => {
     token: tokenOut,
     linked: true,
     bound: true,
+    parallel: Boolean(Number(invite.parallel)),
     user: publicUser(fresh),
     unit: unit ? { id: unit.id, number: unit.number, resident_name: unit.resident_name } : null
   });

@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS invite_tokens (
   created_at  INTEGER NOT NULL,
   expires_at  INTEGER NOT NULL,
   used_at     INTEGER,
-  used_by_tg  INTEGER
+  used_by_tg  INTEGER,
+  -- v2.24.0 — اتصال موازی: 1 یعنی مصرف لینک پروفایل را از حساب‌های دیگر آزاد نمی‌کند
+  parallel    INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_invite_token ON invite_tokens(token);

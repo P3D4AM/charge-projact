@@ -205,9 +205,14 @@ export async function buildAuthContext(request, env) {
     const maxAge = Number(env.INITDATA_MAX_AGE || 86400);
     const tgUser = await validateInitData(initData, botToken, maxAge);
     if (tgUser && tgUser.id) {
-      const row = await env.DB.prepare(
-        'SELECT * FROM users WHERE telegram_user_id = ? AND is_active = 1 LIMIT 1'
-      ).bind(tgUser.id).first();
+      // v2.24.0 — یک پروفایل تلگرام می‌تواند به چند حساب متصل باشد (اتصال موازی)؛
+      // ورود مینی‌اپ باید قطعی باشد: اول مدیر ساختمان، بعد ساکن، در آخر مدیر اپ
+      // (اپِ مدیر اپ پنل وب است). قبلاً LIMIT 1 بدون ترتیب، بستگی به ترتیب اتصال داشت.
+      const row = await env.DB.prepare(`
+        SELECT * FROM users WHERE telegram_user_id = ? AND is_active = 1
+        ORDER BY CASE role WHEN 'manager' THEN 0 WHEN 'resident' THEN 1 ELSE 2 END, id
+        LIMIT 1
+      `).bind(tgUser.id).first();
       if (row) {
         // v2.17.0 — حساب قفل‌شده فقط با پروفایل خودش از initData وارد می‌شود
         if (Number(row.bound_tg_id || 0) && Number(row.bound_tg_id) !== Number(tgUser.id)) return null;
@@ -356,19 +361,10 @@ export async function loginWithPassword(request, env, username, password) {
           code: 'profile_locked'
         };
       }
-      // v2.15.0 — هر کس فقط با پروفایل خودش وارد می‌شود: اگر این پروفایل تلگرام
-      // قبلاً به حساب دیگری وصل شده، ورود با حساب دیگری از این پروفایل رد می‌شود
-      // (قبلاً بی‌صدا بدون اتصال وارد می‌شد و راه سوءاستفاده بود)
-      const taken = await env.DB.prepare(
-        'SELECT id, username FROM users WHERE telegram_user_id = ? AND id != ? LIMIT 1'
-      ).bind(tgUser.id, user.id).first();
-      if (taken) {
-        return {
-          error: 'این پروفایل تلگرام قبلاً به حساب دیگری متصل شده است؛ با همان حساب وارد شوید. اگر می‌خواهید این حساب به این پروفایل منتقل شود، لینک اتصال تلگرام (یک‌بارمصرف) همین حساب را با همین پروفایل باز کنید و یوزرنیم و رمزش را وارد کنید',
-          status: 403,
-          code: 'telegram_profile_taken'
-        };
-      }
+      // v2.15.0 — هر کس فقط با اعتبارنامهٔ خودش وارد می‌شود؛ v2.24.0 — ورود
+      // موفق با یوزر/پسورد، اثبات مالکیت است: همین پروفایل به این حساب هم وصل
+      // می‌شود (اتصال موازی) حتی اگر به حساب دیگری هم وصل باشد. انتقال کامل
+      // پروفایل فقط با لینک دعوتِ بدون پرچم parallel انجام می‌شود.
       // keep a manually-entered username when initData carries none
       const tgUname = tgUser.username || user.telegram_username || '';
       await env.DB.prepare(

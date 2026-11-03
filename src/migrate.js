@@ -113,6 +113,10 @@ export function ensureSchema(env) {
       last_sent_period  TEXT DEFAULT '',
       created_at        INTEGER NOT NULL
     )`);
+    // v14 (v2.24.0) — اتصال موازی: لینک دعوت با پرچم parallel پروفایل را از
+    // حساب‌های دیگر آزاد نمی‌کند؛ یک تلگرام می‌تواند هم‌زمان به چند حساب
+    // (مدیر ساختمان + مدیر اپ) وصل بماند و نوتیف هر دو به یک چت برسد.
+    await ensure(env, 'invite_tokens', 'parallel', 'ALTER TABLE invite_tokens ADD COLUMN parallel INTEGER NOT NULL DEFAULT 0');
   })();
   return env[PROBE];
 }

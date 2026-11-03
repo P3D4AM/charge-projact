@@ -1,6 +1,6 @@
 {
   "name": "telegram-building-charges",
-  "version": "2.23.2",
+  "version": "2.24.0",
   "private": true,
   "type": "module",
   "description": "Telegram Mini App for building charge management, deployed on Cloudflare Workers + D1",

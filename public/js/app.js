@@ -1160,6 +1160,8 @@ async function openInviteModal(acc, onDone, unitLabel = '') {
         </div>
         <div id="inv-active">${linkBox(active)}</div>
         <div class="hint">این لینک <b>فقط یک بار</b> کار می‌کند: ساکن باید آن را <b>از داخل تلگرام و با پروفایل خودش</b> باز کند. با باز کردن لینک، حسابش فقط به همان پروفایل قفل می‌شود — پروفایل‌های قبلی و ورود با یوزر/پسورد از پروفایل دیگر دیگر اپ را باز نمی‌کنند.</div>
+        <div class="field"><label class="chk"><input type="checkbox" id="inv-parallel"> اتصال موازی — پروفایل بازکنندهٔ لینک به حساب‌های دیگرش هم متصل بماند</label>
+          <div class="hint">برای وقتی که یک نفر چند حساب دارد (مثلاً مدیر ساختمان و مدیر اپ) و می‌خواهد پیام هر دو در یک چت تلگرام برسد. بدون این گزینه، باز کردن لینک اتصال حساب‌های دیگرِ همان پروفایل را قطع می‌کند (انتقال).</div></div>
         <div class="field"><label>اعتبار لینک جدید</label>
           <div class="filter-row" data-inv-hours>
             ${INVITE_HOURS.map(([h, l], i) => `<button class="fchip ${i === 3 ? 'on' : ''}" data-h="${h}">${l}</button>`).join('')}
@@ -1207,7 +1209,7 @@ async function openInviteModal(acc, onDone, unitLabel = '') {
       if (genBtn) genBtn.addEventListener('click', async () => {
         genBtn.disabled = true;
         try {
-          const r = await api('/invites', { method: 'POST', body: { user_id: acc.id, hours } });
+          const r = await api('/invites', { method: 'POST', body: { user_id: acc.id, hours, parallel: ($('#inv-parallel', mm.el) || {}).checked === true } });
           haptic('success');
           toast('لینک یک‌بارمصرف ساخته شد', 'ok');
           await done2();

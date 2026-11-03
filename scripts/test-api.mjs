@@ -1495,10 +1495,12 @@ const period = currentPeriod();
   });
   assert.equal((await j(await handleApi(meB, env))).s, 401, 'token refused from ANOTHER telegram profile');
 
-  // (ب) ورود با حساب دیگری از همان پروفایل A (که به حساب ساکن قفل شده) → ۴۰۳
+  // (ب) v2.24.0 — ورود با حساب دیگری از همان پروفایل A با اعتبارنامهٔ درست →
+  // اتصال موازی: پروفایل به هر دو حساب وصل می‌ماند و نوتیف هر دو به یک چت می‌رسد
+  // (انتقال کامل پروفایل فقط با لینک دعوتِ بدون پرچم parallel انجام می‌شود)
   const mgr2 = await j(await handleApi(postInit('/auth/login', { username: 'pmgr', password: 'manager123' }, makeInitData(tgA)), env));
-  assert.equal(mgr2.s, 403, 'cross-account login from a bound profile rejected');
-  assert.equal(mgr2.d.code, 'telegram_profile_taken');
+  assert.equal(mgr2.s, 200, 'cross-account login now binds in parallel (v2.24.0)');
+  assert.equal(mgr2.d.linked_telegram, true, 'second account linked to the same profile');
 
   // (ج) ضدتزریق فرمول CSV: تلفن واحد که با «=» شروع می‌شود در CSV خنثی می‌شود
   await j(await handleApi(req('/units/' + unit.d.unit.id, { method: 'PUT', body: { phone: '=1+1|cmd' }, token: mgrToken17 }), env));
@@ -2253,6 +2255,115 @@ const period = currentPeriod();
   assert.equal(del.s, 200);
   const gone = await j(await handleApi(req(`/a/mreminders/${mk3.d.item.id}`, { method: 'PUT', body: { is_active: true }, token: adminT }), env));
   assert.equal(gone.s, 404, 'deleted reminder is gone');
+}
+
+
+// ---------- 24) v2.24.0 — اتصال موازی چند حساب به یک پروفایل تلگرام ----------
+{
+  const env = makeEnv();
+  const BOT = '7200000000:TESTTOKEN24';
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('bot_token', ?)").bind(BOT).run();
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('bot_username', 'parallelbot')").run();
+
+  const makeInitData = userObj => {
+    const p = new URLSearchParams();
+    p.set('auth_date', String(Math.floor(Date.now() / 1000)));
+    p.set('query_id', 'AAF_l0m2QAAAAAB_l0m2Q');
+    p.set('user', JSON.stringify(userObj));
+    const dcs = [...p.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join('\n');
+    const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT).digest();
+    p.set('hash', crypto.createHmac('sha256', secret).update(dcs).digest('hex'));
+    return p.toString();
+  };
+  const postInit = (path, body, initData) => new Request('http://localhost/api' + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-telegram-init-data': initData },
+    body: JSON.stringify(body)
+  });
+
+  const inst = await j(await handleApi(req('/install', {
+    method: 'POST', body: { building_name: 'برج موازی', username: 'Root', password: 'root1234' }
+  }), env));
+  const adminToken = inst.d.token;
+  const adminId = inst.d.user.id;
+  await j(await handleApi(req('/a/managers', {
+    method: 'POST', body: { username: 'pmgr', password: 'pmgr1234', full_name: 'مدیر موازی' }, token: adminToken
+  }), env));
+  const mgrToken = (await j(await handleApi(req('/auth/login', { method: 'POST', body: { username: 'pmgr', password: 'pmgr1234' } }), env))).d.token;
+
+  // (۱) لینک دعوت برای حساب مدیر اپ — فقط توسط خودش؛ پرچم parallel ذخیره می‌شود
+  const ai = await j(await handleApi(req('/invites', {
+    method: 'POST', body: { user_id: adminId, hours: 24, parallel: true }, token: adminToken
+  }), env));
+  assert.equal(ai.s, 201, 'admin can create invite for himself (v2.24.0)');
+  assert.equal(ai.d.invite.parallel, true, 'parallel flag stored and exposed');
+  const denied = await j(await handleApi(req('/invites', {
+    method: 'POST', body: { user_id: adminId, hours: 24 }, token: mgrToken
+  }), env));
+  assert.equal(denied.s, 409, 'manager still cannot create admin invite');
+
+  // (۲) پروفایل ۴۲۴۲۴۲ اول با ورود پسوردی داخل تلگرام به حساب مدیر وصل می‌شود
+  const TG = 424242;
+  const tgUser = { id: TG, username: 'parvane_tg', first_name: 'پروانه' };
+  const mLogin = await j(await handleApi(postInit('/auth/login', { username: 'pmgr', password: 'pmgr1234' }, makeInitData(tgUser)), env));
+  assert.equal(mLogin.s, 200, 'manager login inside telegram binds');
+  assert.equal(mLogin.d.linked_telegram, true, 'manager linked to profile');
+
+  // (۳) مصرف لینک موازی admin با همان پروفایل → هر دو وصل، اتصال مدیر دست‌نخورده
+  const aConsume = await j(await handleApi(postInit('/auth/invite', {
+    token: ai.d.invite.token, username: 'Root', password: 'root1234'
+  }, makeInitData(tgUser)), env));
+  assert.equal(aConsume.s, 200, 'parallel admin invite consumed with same profile');
+  assert.equal(aConsume.d.parallel, true, 'response marks parallel link');
+  // مصرف لینک، نشست‌های قبلی حساب هدف را باطل می‌کند — توکن تازه را برمی‌داریم
+  const adminToken2 = aConsume.d.token;
+  assert.ok(adminToken2, 'fresh admin session from invite consumption');
+  const mRow = await env.DB.prepare('SELECT telegram_user_id FROM users WHERE username = ?').bind('pmgr').first();
+  assert.equal(Number(mRow.telegram_user_id), TG, 'manager binding KEPT after parallel link');
+  const aRow = await env.DB.prepare('SELECT telegram_user_id, bound_tg_id FROM users WHERE username = ?').bind('root').first();
+  assert.equal(Number(aRow.telegram_user_id), TG, 'admin bound to the same profile');
+  assert.equal(Number(aRow.bound_tg_id), TG, 'admin locked to the profile');
+  const both = await env.DB.prepare('SELECT COUNT(*) AS c FROM users WHERE telegram_user_id = ?').bind(TG).first();
+  assert.equal(Number(both.c), 2, 'two accounts on one profile → both notification streams reach one chat');
+
+  // (۴) ورود مینی‌اپ با initData → انتخاب قطعی: مدیر ساختمان (نه مدیر اپ)
+  const who = await j(await handleApi(postInit('/auth/telegram', {}, makeInitData(tgUser)), env));
+  assert.equal(who.s, 200, 'initData login with two bound accounts');
+  assert.equal(who.d.user.username, 'pmgr', 'mini app resolves manager first (tie-break)');
+
+  // (۵) ورود پسوردی دوباره از همان پروفایل برای هر دو حساب — بدون ۴۰۳ قدیمی
+  const m2 = await j(await handleApi(postInit('/auth/login', { username: 'pmgr', password: 'pmgr1234' }, makeInitData(tgUser)), env));
+  assert.equal(m2.s, 200, 'manager re-login inside telegram ok (no profile_taken)');
+  const a2 = await j(await handleApi(postInit('/auth/login', { username: 'Root', password: 'root1234' }, makeInitData(tgUser)), env));
+  assert.equal(a2.s, 200, 'admin password login inside telegram ok (parallel)');
+
+  // (۶) لینک غیرموازی (انتقال) همچنان پروفایل را از حساب‌های دیگر می‌گیرد
+  const unit = await j(await handleApi(req('/units', {
+    method: 'POST', body: { number: '77', resident_name: 'ساکن هفتادوهر' }, token: mgrToken
+  }), env));
+  assert.equal(unit.s, 201);
+  const res = await j(await handleApi(req('/residents', {
+    method: 'POST', body: { username: 'pres77', password: 'pres1234', unit_id: unit.d.unit.id }, token: mgrToken
+  }), env));
+  assert.equal(res.s, 201);
+  const TG2 = 424243;
+  const tg2 = { id: TG2, username: 'parvane2_tg', first_name: 'پروانه۲' };
+  const rBind = await j(await handleApi(postInit('/auth/login', { username: 'pres77', password: 'pres1234' }, makeInitData(tg2)), env));
+  assert.equal(rBind.s, 200, 'resident bound to profile 2');
+  const ti = await j(await handleApi(req('/invites', {
+    method: 'POST', body: { user_id: adminId, hours: 24 }, token: adminToken2
+  }), env));
+  assert.equal(ti.s, 201);
+  assert.equal(ti.d.invite.parallel, false, 'without flag → transfer link');
+  const tCon = await j(await handleApi(postInit('/auth/invite', {
+    token: ti.d.invite.token, username: 'Root', password: 'root1234'
+  }, makeInitData(tg2)), env));
+  assert.equal(tCon.s, 200, 'transfer invite consumed');
+  const rRow = await env.DB.prepare('SELECT telegram_user_id FROM users WHERE username = ?').bind('pres77').first();
+  assert.equal(Number(rRow.telegram_user_id || 0), 0, 'transfer STILL strips other accounts of the profile');
+  const aRow2 = await env.DB.prepare('SELECT telegram_user_id FROM users WHERE username = ?').bind('root').first();
+  assert.equal(Number(aRow2.telegram_user_id), TG2, 'admin moved to profile 2');
+  console.log('test-api: v2.24.0 parallel-link block ✓');
 }
 
 console.log('test-api: ALL PASSED ✓');

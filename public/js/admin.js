@@ -596,6 +596,8 @@ async function openInviteModal(u, onDone, unitLabel = '') {
         </div>
         <div id="inv-active">${linkBox(active)}</div>
         <div class="hint">این لینک <b>فقط یک بار</b> کار می‌کند: کاربر باید آن را <b>از داخل تلگرام و با پروفایل خودش</b> باز کند. با باز کردن لینک، حسابش فقط به همان پروفایل قفل می‌شود — پروفایل‌های قبلی و ورود با یوزر/پسورد از پروفایل دیگر دیگر اپ را باز نمی‌کنند.</div>
+        <div class="field"><label class="chk"><input type="checkbox" id="inv-parallel"> اتصال موازی — پروفایل بازکنندهٔ لینک به حساب‌های دیگرش هم متصل بماند</label>
+          <div class="hint">برای وقتی که یک نفر چند حساب دارد (مثلاً مدیر ساختمان و مدیر اپ) و می‌خواهد پیام هر دو در یک چت تلگرام برسد. برای حساب مدیر اپ فقط خودِ مدیر اپ می‌تواند لینک بسازد. بدون این گزینه، باز کردن لینک اتصال حساب‌های دیگرِ همان پروفایل را قطع می‌کند (انتقال).</div></div>
         <div class="field"><label>اعتبار لینک جدید</label>
           <div class="filter-row" data-inv-hours>
             ${INVITE_HOURS.map(([h, l], i) => `<button class="fchip ${i === 3 ? 'on' : ''}" data-h="${h}">${l}</button>`).join('')}
@@ -643,7 +645,7 @@ async function openInviteModal(u, onDone, unitLabel = '') {
       if (genBtn) genBtn.addEventListener('click', async () => {
         genBtn.disabled = true;
         try {
-          const r = await api('/invites', { method: 'POST', body: { user_id: u.id, hours } });
+          const r = await api('/invites', { method: 'POST', body: { user_id: u.id, hours, parallel: ($('#inv-parallel', mm.el) || {}).checked === true } });
           haptic('success');
           toast('لینک یک‌بارمصرف ساخته شد', 'ok');
           await done2();
@@ -1770,7 +1772,7 @@ BOT_TOKEN=123:ABC npm run deploy:auto</pre>
 // --- panel tutorial (آموزش پنل — v2.10.0) ------------------------------------
 // Full usage tutorial for every tab of this panel. The explanatory note that
 // used to sit at the bottom of the dashboard was moved into section 2 here.
-const PANEL_DOCS_VERSION = '2.23.2';
+const PANEL_DOCS_VERSION = '2.24.0';
 
 function viewTutorial() {
   const parts = [
